@@ -41,7 +41,7 @@ if str(_RECOMPILER_DIR) not in sys.path:
     sys.path.insert(0, str(_RECOMPILER_DIR))
 
 from snes65816 import (  # noqa: E402
-    decode_insn, lorom_offset, Insn,
+    decode_insn, is_rom_address, lorom_offset, Insn,
     ABS, INDIR, INDIR_X, LONG, IMM,
 )
 
@@ -272,7 +272,7 @@ def _autorecover_dp_table_count(rom: bytes, bank: int,
             addr16 = rom[off] | (rom[off + 1] << 8)
             if addr16 == 0:
                 break
-            if addr16 < 0x8000:
+            if not is_rom_address(bank, addr16):
                 break
             if _addr_in_data_regions(data_regions, bank, addr16):
                 break
@@ -309,7 +309,7 @@ def _autorecover_dp_table_count(rom: bytes, bank: int,
             # Single null tolerated; two consecutive = stop.
             # Simpler: stop on first null. Real handlers don't sit at $0000.
             break
-        if addr16 < 0x8000:
+        if not is_rom_address(eb, addr16):
             break
         if _addr_in_data_regions(data_regions, eb, addr16):
             break
@@ -424,11 +424,9 @@ def _autorecover_indirect_xtable(rom: bytes, bank: int, insn,
             tbl_pc += entry_size
             continue
         nulls_in_a_row = 0
-        if addr16 < 0x8000:
+        if not is_rom_address(eb, addr16):
             break
         if entry_size == 3 and (eb < 0x00 or eb > 0xFF):  # defensive
-            break
-        if entry_size == 3 and addr16 < 0x8000:
             break
         if _addr_in_data_regions(data_regions, eb, addr16):
             break
@@ -481,7 +479,7 @@ def _autorecover_local_stride_runway(rom: bytes, bank: int, func_start: int,
         return None
 
     def read8(pc16: int) -> Optional[int]:
-        if not (0x8000 <= pc16 <= 0xFFFF):
+        if not is_rom_address(bank, pc16):
             return None
         try:
             off = lorom_offset(bank, pc16)
@@ -493,7 +491,7 @@ def _autorecover_local_stride_runway(rom: bytes, bank: int, func_start: int,
 
     site_pc &= 0xFFFF
     p = site_pc - 17
-    if p < 0x8000:
+    if p < 0 or not is_rom_address(bank, p):
         return None
 
     dp = dp_addr & 0xFF
@@ -525,7 +523,7 @@ def _autorecover_local_stride_runway(rom: bytes, bank: int, func_start: int,
     if base_lo is None or base_hi is None:
         return None
     base = base_lo | (base_hi << 8)
-    if not (0x8000 <= base <= 0xFFFF):
+    if not is_rom_address(bank, base):
         return None
     start16 = func_start & 0xFFFF
     if base < start16:
@@ -1240,7 +1238,7 @@ def detect_inline_arg_bytes(rom: bytes, bank: int, addr: int,
     budget = 0
     while budget < 96:
         budget += 1
-        if not (0x8000 <= pc <= 0xFFFF):
+        if not is_rom_address(bank, pc):
             return None
         try:
             off = lorom_offset(bank, pc)
@@ -1371,7 +1369,7 @@ def classify_dispatch_helper(rom: bytes, bank: int, addr: int):
     safety = 0
     while safety < 256:
         safety += 1
-        if not (0x8000 <= pc <= 0xFFFF):
+        if not is_rom_address(bank, pc):
             return None
         try:
             offset = lorom_offset(bank, pc)
@@ -1780,8 +1778,8 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
             if boundary not in graph.boundary_exits:
                 graph.boundary_exits.append(boundary)
             continue
-        if not (0x8000 <= pc <= 0xFFFF):
-            # Out-of-bank reference; surface upstream by skipping here.
+        if not is_rom_address(bank, pc):
+            # Address outside the active cartridge ROM window.
             continue
         if _addr_in_data_regions(data_regions, bank, pc):
             graph.data_region_exec_pcs.add(key.pc & 0xFFFFFF)
@@ -1866,14 +1864,11 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                     # The intro pipeline would skip these init handlers
                     # — root cause of the Nintendo-jingle endless-loop
                     # (subsubmodule 8/9/10 dispatched to nothing).
-                    # Replacement check: accept any valid LoROM bank
-                    # ($00-$3F or $80-$FF) with addr16 >= 0x8000. The
+                    # Replacement check: accept any address in the active
+                    # cartridge mapping. The
                     # `_dispatch_target_is_padding` gate below catches
                     # genuine table-end junk.
-                    if addr16 < 0x8000:
-                        break
-                    is_valid_lorom_bank = (eb < 0x40) or (eb >= 0x80)
-                    if not is_valid_lorom_bank:
+                    if not is_rom_address(eb, addr16):
                         break
                     # Validity gate: stop the table if the entry points
                     # into all-FF or all-00 bytes. See
@@ -1898,7 +1893,7 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                         entries.append(0)
                         tbl_pc += entry_size
                         continue
-                    if addr16 < 0x8000:
+                    if not is_rom_address(bank, addr16):
                         break
                     if _dispatch_target_is_padding(rom, bank, addr16):
                         break
@@ -2018,13 +2013,13 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                             '_autorecovered': True,
                         }
             # Static single-target form: `JMP ($<abs>)` / `JML [$<abs>]`
-            # where <abs> is in ROM range ($8000+). The pointer lives
+            # where <abs> is in the active cartridge ROM window. The pointer lives
             # directly in ROM at (bank, abs) — read it once at decode
             # time and treat the site as a 1-entry dispatch. Equivalent
             # to a plain JMP to the read target, but produced as a
             # dispatch so the same emit path applies.
             if (auth is None and insn.mode == INDIR
-                    and (insn.operand & 0xFFFF) >= 0x8000):
+                    and is_rom_address(bank, insn.operand & 0xFFFF)):
                 tbl_pc = insn.operand & 0xFFFF
                 entry_size = 3 if _dispatch_kind(insn) == 'long' else 2
                 try:
@@ -2037,7 +2032,7 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                     tgt_hi = rom[tbl_off + 1]
                     tgt16 = tgt_lo | (tgt_hi << 8)
                     tgt_bank = rom[tbl_off + 2] if entry_size == 3 else bank
-                    if (tgt16 >= 0x8000
+                    if (is_rom_address(tgt_bank, tgt16)
                             and not _addr_in_data_regions(
                                 data_regions, tgt_bank, tgt16)
                             and not _dispatch_target_is_padding(
@@ -2113,7 +2108,7 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                             continue
                         eb = (e >> 16) & 0xFF
                         e16 = e & 0xFFFF
-                        if eb == bank and 0x8000 <= e16 <= 0xFFFF:
+                        if eb == bank and is_rom_address(eb, e16):
                             extra_succs.append(
                                 (DecodeKey(addr24(eb, e16), site_m, site_x, ()),
                                  'jump'))
@@ -2240,7 +2235,7 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                             continue
                         eb = (e >> 16) & 0xFF
                         e16 = e & 0xFFFF
-                        if eb == bank and 0x8000 <= e16 <= 0xFFFF:
+                        if eb == bank and is_rom_address(eb, e16):
                             labeled_succ.append(
                                 (DecodeKey(addr24(eb, e16), 1, 1, ()),
                                  'jump'))
@@ -2283,7 +2278,7 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                             continue
                         eb = (e >> 16) & 0xFF
                         e16 = e & 0xFFFF
-                        if eb == bank and 0x8000 <= e16 <= 0xFFFF:
+                        if eb == bank and is_rom_address(eb, e16):
                             labeled_succ.append(
                                 (DecodeKey(addr24(eb, e16), site_m, site_x, ()),
                                  'dispatch'))
@@ -2444,7 +2439,7 @@ def _decode_function_uncached(rom: bytes, bank: int, start: int,
                 for e in entries:
                     e16 = e & 0xFFFF
                     eb = (e >> 16) & 0xFF if kind == 'long' else bank
-                    if eb == bank and 0x8000 <= e16 <= 0xFFFF:
+                    if eb == bank and is_rom_address(eb, e16):
                         labeled_succ.append(
                             (DecodeKey(addr24(eb, e16), site_m, site_x, ()), 'jump')
                         )

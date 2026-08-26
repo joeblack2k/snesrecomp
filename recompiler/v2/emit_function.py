@@ -1655,10 +1655,10 @@ def emit_function(rom: bytes, bank: int, start: int,
                                 jml_x = getattr(insn, 'x_flag', key.x) & 1
                                 from v2.codegen import (
                                     register_call_demand,
-                                    _is_invalid_lorom_call_target,
+                                    _is_invalid_rom_call_target,
                                     get_name_for_pc,
                                     has_exact_variant)
-                                if (_is_invalid_lorom_call_target(target_pc24)
+                                if (_is_invalid_rom_call_target(target_pc24)
                                         and get_name_for_pc(target_pc24)
                                         is None):
                                     # Cross-bank JML to a non-code address
@@ -1674,7 +1674,7 @@ def emit_function(rom: bytes, bank: int, start: int,
                                         f"return RECOMP_RETURN_NORMAL; "
                                         f"/* cross-bank JML to "
                                         f"${target_pc24:06X} skipped — not a "
-                                        f"valid LoROM code address (decoder "
+                                        f"valid ROM code address (decoder "
                                         f"followed garbage operand past an "
                                         f"RTS) */")
                                 else:

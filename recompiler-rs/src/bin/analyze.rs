@@ -24,7 +24,8 @@ use snesrecomp_analyzer::decoder::{
 };
 use snesrecomp_analyzer::insn::Mode;
 use snesrecomp_analyzer::rom::{
-    detect_rom_mapping, load_rom, vector_table_offset, RelocRegion, RomMapping,
+    detect_rom_mapping, is_rom_address, load_rom, rom_offset, vector_table_offset,
+    RelocRegion, RomMapping,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -432,10 +433,11 @@ fn target_is_code(key: VariantKey, inputs: &Inputs, rom: &[u8]) -> bool {
     }
     let bank = (key.pc24 >> 16) & 0xFF;
     let pc = key.pc24 & 0xFFFF;
-    if pc < 0x8000 || (0x40..0x80).contains(&bank) {
+    let mapping = detect_rom_mapping(rom);
+    if !is_rom_address(mapping, bank, pc) {
         return false;
     }
-    let offset = ((bank & 0x7F) as usize) * 0x8000 + (pc as usize - 0x8000);
+    let offset = rom_offset(mapping, bank, pc);
     if offset >= rom.len() {
         return false;
     }
@@ -1693,5 +1695,41 @@ mod tests {
         };
         let graph = decode_function(&rom, 0, 0x8000, 1, 1, None, &env);
         assert!(!has_truncated_call_continuation(&graph));
+    }
+
+    #[test]
+    fn hirom_full_bank_low_pc_is_a_code_target() {
+        let mut rom = vec![0u8; 0x80000];
+        rom[0xFFD5] = 0x21;
+        rom[0xFFFC..0xFFFE].copy_from_slice(&0xFF81u16.to_le_bytes());
+        rom[0xFFDC..0xFFDE].copy_from_slice(&0x1234u16.to_le_bytes());
+        rom[0xFFDE..0xFFE0].copy_from_slice(&0xEDCBu16.to_le_bytes());
+        let inputs = Inputs {
+            cfgs: Vec::new(),
+            roots: BTreeSet::new(),
+            entries: HashMap::new(),
+            sibling_entries: HashMap::new(),
+            cfg_index: HashMap::new(),
+            data_regions: Vec::new(),
+            exclude_ranges: HashMap::new(),
+            force_lle: BTreeSet::new(),
+            indirect_dispatch: HashMap::new(),
+            hle_dispatch: HashMap::new(),
+            inline_skip: HashMap::new(),
+            terminal_jsr_sites: BTreeSet::new(),
+            declared_exit_modes: HashMap::new(),
+            reloc_regions: Vec::new(),
+        };
+
+        assert!(target_is_code(
+            VariantKey::new(0xC40000, 1, 1),
+            &inputs,
+            &rom
+        ));
+        assert!(!target_is_code(
+            VariantKey::new(0x040000, 1, 1),
+            &inputs,
+            &rom
+        ));
     }
 }

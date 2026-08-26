@@ -8,6 +8,7 @@ from snes65816 import (
     set_rom_mapping,
     vector_table_offset,
 )
+from v2.emit_function import emit_function
 
 
 def _hirom_fixture():
@@ -45,3 +46,28 @@ def test_ambiguous_header_preserves_lorom_compatibility_default():
     rom = bytes([0xFF] * 0x10000)
     assert detect_rom_mapping(rom) == ROM_MAP_LOROM
     assert vector_table_offset(rom) == 0x7FE0
+
+
+def test_hirom_full_bank_low_half_function_emits_instructions():
+    """AOT emission must not drop code below $8000 in full HiROM banks."""
+    previous = get_rom_mapping()
+    try:
+        rom = bytearray([0xFF] * 0x50000)
+        rom[0xFFD5] = 0x31
+        rom[0xFFDC:0xFFE0] = bytes([0xCB, 0xED, 0x34, 0x12])
+        rom[0xFFFC:0xFFFE] = bytes([0xF7, 0x83])
+        rom[0x404E0:0x404E3] = bytes([
+            0xC2, 0x30,  # REP #$30
+            0x40,        # RTI
+        ])
+        set_rom_mapping(ROM_MAP_HIROM)
+
+        src = emit_function(
+            bytes(rom), bank=0xC4, start=0x04E0,
+            entry_m=0, entry_x=0, func_name="HiromNmi")
+
+        assert "L_04E0_M0X0:" in src
+        assert "cpu->P = (uint8)(cpu->P & ~0x30)" in src
+        assert "RTI: popped interrupt frame" in src
+    finally:
+        set_rom_mapping(previous)

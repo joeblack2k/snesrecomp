@@ -266,9 +266,9 @@ def test_transfer_a_to_x():
 
 
 def test_call_long_emits_function_call():
-    op = Call(target=0x7E8034, long=True)
+    op = Call(target=0x018034, long=True)
     s = _joined(emit_op(op))
-    assert "bank_7E_8034" in s
+    assert "bank_01_8034" in s
 
 
 def test_terminal_jsr_pushes_inline_frame_but_inherits_outer_context():
@@ -307,45 +307,80 @@ def test_call_rejects_sub_8000_lorom_target():
     Call decoded with such a target arose from the decoder following
     unreachable bytes past an RTS — skip emit so the linker doesn't
     need a hand-written stub. Regression for chore/cleanup A1."""
+    from snes65816 import ROM_MAP_LOROM, get_rom_mapping, set_rom_mapping
     from v2.codegen import set_name_resolver
-    set_name_resolver({})  # ensure no exemption
-    op = Call(target=0x030E8C, long=True)
-    s = _joined(emit_op(op))
-    assert "not a valid LoROM" in s
-    assert "bank_03_0E8C" not in s
-    assert "sub_03_0e8c" not in s
+    previous = get_rom_mapping()
+    set_rom_mapping(ROM_MAP_LOROM)
+    try:
+        set_name_resolver({})  # ensure no exemption
+        op = Call(target=0x030E8C, long=True)
+        s = _joined(emit_op(op))
+        assert "not a valid ROM" in s
+        assert "bank_03_0E8C" not in s
+        assert "sub_03_0e8c" not in s
+    finally:
+        set_rom_mapping(previous)
 
 
 def test_call_rejects_out_of_rom_target():
     """Target whose canonical LoROM offset is beyond the ROM image
-    extent is invalid. Tests rule 2 of _is_invalid_lorom_call_target."""
+    extent is invalid. Tests the extent rule of _is_invalid_rom_call_target."""
+    from snes65816 import ROM_MAP_LOROM, get_rom_mapping, set_rom_mapping
     from v2.codegen import set_name_resolver, set_rom_size
+    previous = get_rom_mapping()
+    set_rom_mapping(ROM_MAP_LOROM)
     set_name_resolver({})
     set_rom_size(0x80000)  # 512 KB (SMW size)
     try:
         op = Call(target=0x24222F, long=True)  # bank $24 way past SMW extent
         s = _joined(emit_op(op))
-        assert "not a valid LoROM" in s
+        assert "not a valid ROM" in s
         assert "bank_24_222F" not in s
     finally:
         set_rom_size(0)  # reset for other tests
+        set_rom_mapping(previous)
+
+
+def test_call_accepts_low_pc_in_full_bank_hirom_window():
+    """HiROM banks $40-$7D/$C0-$FF map ROM across the full 64 KiB.
+
+    Super Bomberman's reset trampoline jumps to $C4:0000; rejecting that
+    valid address as a LoROM-style low-half target prevents bring-up.
+    """
+    from snes65816 import ROM_MAP_HIROM, get_rom_mapping, set_rom_mapping
+    from v2.codegen import set_name_resolver, set_rom_size
+    previous = get_rom_mapping()
+    set_rom_mapping(ROM_MAP_HIROM)
+    set_name_resolver({})
+    set_rom_size(0x80000)
+    try:
+        s = _joined(emit_op(Call(target=0xC40000, long=True)))
+        assert "bank_C4_0000" in s
+        assert "not a valid ROM" not in s
+    finally:
+        set_rom_size(0)
+        set_rom_mapping(previous)
 
 
 def test_call_exempts_cfg_named_out_of_rom_target():
     """Out-of-ROM targets WITH an explicit cfg `name` entry must still
     emit a normal call — these are HLE replacements implemented in
     hand-written C (e.g. SmwRunDecompressFromWRAM at $7F:8000)."""
+    from snes65816 import ROM_MAP_LOROM, get_rom_mapping, set_rom_mapping
     from v2.codegen import set_name_resolver, set_rom_size
+    previous = get_rom_mapping()
+    set_rom_mapping(ROM_MAP_LOROM)
     set_name_resolver({0x7F8000: "SmwRunDecompressFromWRAM"})
     set_rom_size(0x80000)
     try:
         op = Call(target=0x7F8000, long=True)
         s = _joined(emit_op(op))
         assert "SmwRunDecompressFromWRAM" in s
-        assert "not a valid LoROM" not in s
+        assert "not a valid ROM" not in s
     finally:
         set_name_resolver({})
         set_rom_size(0)
+        set_rom_mapping(previous)
 
 
 def test_return_short_emits_return_stmt():

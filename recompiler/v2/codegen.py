@@ -33,6 +33,7 @@ for p in (str(_THIS_DIR), str(_RECOMPILER_DIR)):
         sys.path.insert(0, p)
 
 from typing import Dict, List, Optional, Tuple  # noqa: E402
+from snes65816 import is_rom_address, rom_offset  # noqa: E402
 from snes_cycles import region_speed  # noqa: E402
 from v2.naming import variant_suffix as _variant_suffix  # noqa: E402
 
@@ -62,8 +63,8 @@ _NAME_RESOLVER: Dict[int, str] = {}
 _UNRESOLVED_CALL_TARGETS: set = set()
 
 # Set by v2_regen via set_rom_size(). Used by _emit_call to validate
-# JSR/JSL target addresses against the LoROM mapping. Targets that
-# resolve to RAM (pc < $8000) or beyond the ROM extent arise from the
+# JSR/JSL target addresses against the active cartridge mapping. Targets that
+# resolve to RAM/registers or beyond the ROM extent arise from the
 # decoder following unreachable bytes past an RTS (the bytes happen to
 # look like a JSL with garbage operands) — they would crash on real
 # hardware too. Skipping the call emit avoids the need for hand-written
@@ -175,26 +176,22 @@ def take_rejected_call_targets() -> set:
     return out
 
 
-def _is_invalid_lorom_call_target(addr_24: int) -> bool:
-    """True when addr_24 cannot be a valid LoROM code target.
+def _is_invalid_rom_call_target(addr_24: int) -> bool:
+    """True when addr_24 cannot be code in the active ROM mapping.
 
-    Two structural rejections, both independent of any cfg directive:
-      1. pc < $8000 — LoROM addresses $00-$7F:$0000-$7FFF are
-         RAM/registers, never ROM code. (Mirrors at $80-$BF too.)
-      2. (canonical_bank * $8000 + pc - $8000) >= rom_size — target
-         byte is beyond the ROM image extent.
+    ``snes65816.load_rom`` selects LoROM or HiROM before analysis.  Delegate
+    window and mirror validation to that shared mapping model, then reject
+    targets whose translated byte lies beyond the actual image extent.
 
-    With _ROM_SIZE unset (== 0) we only apply rule 1 to stay safe in
-    unit-test contexts that don't load a ROM.
+    With _ROM_SIZE unset (== 0), only the mapping-window rule is applied so
+    unit tests that do not load a ROM retain deterministic validation.
     """
+    bank = (addr_24 >> 16) & 0xFF
     pc = addr_24 & 0xFFFF
-    if pc < 0x8000:
+    if not is_rom_address(bank, pc):
         return True
-    if _ROM_SIZE > 0:
-        canon_bank = (addr_24 >> 16) & 0x7F
-        offset = canon_bank * 0x8000 + (pc - 0x8000)
-        if offset >= _ROM_SIZE:
-            return True
+    if _ROM_SIZE > 0 and rom_offset(bank, pc) >= _ROM_SIZE:
+        return True
     return False
 
 # NOTE (2026-05-02): the `_UNRESOLVED_GOTO_TARGETS` machinery has been
@@ -2032,7 +2029,7 @@ def _emit_call(op: Call) -> List[str]:
     if op.target is None:
         return ["/* Call: target unknown — caller dispatches */"]
     addr = op.target & 0xFFFFFF
-    # Reject Calls whose target is structurally out of LoROM AND has no
+    # Reject Calls whose target is structurally outside the active ROM AND has no
     # cfg name. With a cfg name the user has explicitly declared an HLE
     # or hand-written backing (e.g. SmwRunDecompressFromWRAM at $7F:8000
     # is implemented in src/gen_stubs.c). Without a name, the JSL was
@@ -2042,9 +2039,9 @@ def _emit_call(op: Call) -> List[str]:
     # actually run. To clean up the cfg `name`+`void` stub blocks for
     # similar dead-code targets, delete the cfg entries and re-regen —
     # this gate then rejects them in subsequent runs.
-    if _is_invalid_lorom_call_target(addr) and addr not in _NAME_RESOLVER:
+    if _is_invalid_rom_call_target(addr) and addr not in _NAME_RESOLVER:
         _REJECTED_CALL_TARGETS.add(addr)
-        return [f"/* Call: target ${addr:06X} not a valid LoROM code "
+        return [f"/* Call: target ${addr:06X} not a valid ROM code "
                 f"address and no cfg name — skipped (decoder followed "
                 f"garbage operand past an RTS) */"]
     base_name = _NAME_RESOLVER.get(addr)
