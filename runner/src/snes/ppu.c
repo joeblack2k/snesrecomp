@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <inttypes.h>
+#include <time.h>
 
 #include "snes.h"
 #include "../debug_server.h"
@@ -20,6 +22,54 @@ static void PpuDrawWholeLine(Ppu *ppu, uint y);
 static bool ppu_evaluateSprites(Ppu* ppu, int line);
 static uint16_t ppu_getVramRemap(Ppu* ppu);
 
+/* Opt-in renderer stage profiler.  This is intentionally dormant unless
+ * SNESRECOMP_PPU_PROFILE is set, so normal execution and deterministic state
+ * are unaffected.  Aggregate CPU time is sufficient here: the profiler is
+ * used to choose native rewrite targets, not to pace emulation. */
+typedef struct PpuPerfCounters {
+  uint64_t spriteLines;
+  uint64_t drawnLines;
+  clock_t sprites;
+  clock_t mainBackgrounds;
+  clock_t mainEnhancer;
+  clock_t subBackgrounds;
+  clock_t subEnhancer;
+  clock_t composition;
+} PpuPerfCounters;
+
+static PpuPerfCounters g_ppuPerf;
+static int g_ppuPerfEnabled = -1;
+
+#if SNESRECOMP_PPU_PROFILE_SUPPORT
+static void PpuPerfReport(void) {
+  const double scale = 1000.0 / (double)CLOCKS_PER_SEC;
+  fprintf(stderr,
+          "ppu_profile lines=%" PRIu64 " sprite_lines=%" PRIu64
+          " sprites_ms=%.3f main_bg_ms=%.3f main_enhancer_ms=%.3f"
+          " sub_bg_ms=%.3f sub_enhancer_ms=%.3f composition_ms=%.3f\n",
+          g_ppuPerf.drawnLines, g_ppuPerf.spriteLines,
+          (double)g_ppuPerf.sprites * scale,
+          (double)g_ppuPerf.mainBackgrounds * scale,
+          (double)g_ppuPerf.mainEnhancer * scale,
+          (double)g_ppuPerf.subBackgrounds * scale,
+          (double)g_ppuPerf.subEnhancer * scale,
+          (double)g_ppuPerf.composition * scale);
+}
+
+static FORCEINLINE bool PpuPerfEnabled(void) {
+  if (g_ppuPerfEnabled < 0) {
+    const char *value = getenv("SNESRECOMP_PPU_PROFILE");
+    g_ppuPerfEnabled = value && value[0] && strcmp(value, "0") != 0;
+    if (g_ppuPerfEnabled)
+      atexit(PpuPerfReport);
+  }
+  return g_ppuPerfEnabled != 0;
+}
+#else
+static FORCEINLINE bool PpuPerfEnabled(void) {
+  return false;
+}
+#endif
 
 Ppu* ppu_init(void) {
   Ppu* ppu = calloc(1, sizeof(Ppu));  /* zero padding: saveload/co-sim hash determinism */
@@ -547,7 +597,16 @@ void ppu_runLine(Ppu* ppu, int line) {
     if (ppu->overlayRenderBuffer[kPpuOverlaySource_Obj])
       memset(&ppu->overlayBuffers[kPpuOverlaySource_Obj], 0,
              sizeof(ppu->overlayBuffers[kPpuOverlaySource_Obj]));
-    ppu->lineHasSprites = !PPU_forcedBlank(ppu) && ppu_evaluateSprites(ppu, line - 1);
+    if (PpuPerfEnabled()) {
+      clock_t start = clock();
+      ppu->lineHasSprites =
+          !PPU_forcedBlank(ppu) && ppu_evaluateSprites(ppu, line - 1);
+      g_ppuPerf.sprites += clock() - start;
+      g_ppuPerf.spriteLines++;
+    } else {
+      ppu->lineHasSprites =
+          !PPU_forcedBlank(ppu) && ppu_evaluateSprites(ppu, line - 1);
+    }
 
     if (ppu->renderFlags & kPpuRenderFlags_NewRenderer) {
       PpuDrawWholeLine(ppu, line);
@@ -750,8 +809,8 @@ static void PpuApplyMarginGap(Ppu *ppu, uint layer, PpuWindows *win,
   }
 }
 
-static bool PpuViewportAllows(Ppu *ppu, uint layer, int screen_x,
-                              int source_x) {
+static FORCEINLINE bool PpuViewportAllows(Ppu *ppu, uint layer, int screen_x,
+                                          int source_x) {
   if (!ppu->widescreenLineEnhancer)
     return true;
   if (ppu->wsViewportInsetL[layer] | ppu->wsViewportInsetR[layer])
@@ -1890,6 +1949,10 @@ static void PpuDrawBackgrounds(Ppu *ppu, int y, bool sub) {
 }
 
 static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
+  const bool perf_enabled = PpuPerfEnabled();
+  clock_t perf_start;
+  if (perf_enabled)
+    g_ppuPerf.drawnLines++;
   PpuClearOverlayRenderLine(ppu, y);
   if (PPU_forcedBlank(ppu)) {
     uint8 *dst = &ppu->renderBuffer[(y - 1) * ppu->renderPitch];
@@ -1902,26 +1965,41 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
   ClearBackdrop(&ppu->bgBuffers[0]);
 
   // Render main screen
+  if (perf_enabled) perf_start = clock();
   PpuDrawBackgrounds(ppu, y, false);
+  if (perf_enabled) {
+    g_ppuPerf.mainBackgrounds += clock() - perf_start;
+    perf_start = clock();
+  }
   if (ppu->widescreenLineEnhancer &&
       (ppu->extraLeftCur || ppu->extraRightCur))
     ppu->widescreenLineEnhancer(ppu, y, false,
                                 ppu->widescreenLineEnhancerContext);
+  if (perf_enabled)
+    g_ppuPerf.mainEnhancer += clock() - perf_start;
 
   // Render also the subscreen?
   bool rendered_subscreen = false;
   if (PPU_preventMathMode(ppu) != 3 && PPU_addSubscreen(ppu) && PPU_mathEnabled(ppu)) {
     ClearBackdrop(&ppu->bgBuffers[1]);
     if (ppu->screenEnabled[1] != 0) {
+      if (perf_enabled) perf_start = clock();
       PpuDrawBackgrounds(ppu, y, true);
+      if (perf_enabled) {
+        g_ppuPerf.subBackgrounds += clock() - perf_start;
+        perf_start = clock();
+      }
       if (ppu->widescreenLineEnhancer &&
           (ppu->extraLeftCur || ppu->extraRightCur))
         ppu->widescreenLineEnhancer(ppu, y, true,
                                     ppu->widescreenLineEnhancerContext);
+      if (perf_enabled)
+        g_ppuPerf.subEnhancer += clock() - perf_start;
       rendered_subscreen = true;
     }
   }
 
+  if (perf_enabled) perf_start = clock();
   // A game may clamp the world at a room boundary while still asking the
   // split BG3 HUD to occupy the physical framebuffer edges. Composite the
   // full centering budget on those scanlines; outside the live world span,
@@ -2052,6 +2130,8 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
   } while (cw_clip_math >>= 1, ++windex < cwin.nr);
 
   PpuWriteOverlayRenderLine(ppu, kPpuOverlaySource_Obj, y);
+  if (perf_enabled)
+    g_ppuPerf.composition += clock() - perf_start;
 }
 
 static bool PpuWidescreenHudOamSlot(Ppu *ppu, uint8_t index, uint8_t y) {

@@ -18,6 +18,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef SNESRECOMP_STACKBAL_AUDIT
+#define SNESRECOMP_STACKBAL_AUDIT 0
+#endif
+
 Snes *g_snes;
 Cpu *g_snes_cpu;
 
@@ -325,17 +329,22 @@ const recomp_snap_entry* recomp_snap_lookup(int call_idx) {
  * a denied(interp) run. See cpu_state.c. */
 static int g_wlog_aot_slot = -1;
 
-static int wlog_func_matches(const char *name) {
+static FORCEINLINE int wlog_func_matches(const char *name) {
   static const char *prefix;
   static size_t prefix_len;
+  static int enabled;
   static int initialized;
   if (!initialized) {
-    prefix = getenv("SNESRECOMP_WLOG_FUNC_PREFIX");
-    if (!prefix || !*prefix) prefix = "vram_payload_handler_M";
-    prefix_len = strlen(prefix);
+    const char *output = getenv("SNESRECOMP_WLOG");
+    enabled = output && *output;
+    if (enabled) {
+      prefix = getenv("SNESRECOMP_WLOG_FUNC_PREFIX");
+      if (!prefix || !*prefix) prefix = "vram_payload_handler_M";
+      prefix_len = strlen(prefix);
+    }
     initialized = 1;
   }
-  return name && strncmp(name, prefix, prefix_len) == 0;
+  return enabled && name && strncmp(name, prefix, prefix_len) == 0;
 }
 
 void RecompStackDump(void);
@@ -479,6 +488,7 @@ void RecompStackPop(void) {
      * the parent's post-call tail are falsely assigned to the callee that was
      * merely the previous function entry. */
     cpu_trace_func_exit(&g_cpu);
+#if SNESRECOMP_STACKBAL_AUDIT
     const char *fn = g_recomp_stack[g_recomp_stack_top - 1];
     int slot = g_recomp_stack_top - 1;
     int delta = (int)(int16_t)(g_cpu.S - g_cpu_entry_s[slot]) -
@@ -488,6 +498,7 @@ void RecompStackPop(void) {
       e->calls++;
       if (delta) { e->total_delta += delta; e->nonzero++; e->last_delta = delta; }
     }
+#endif
     boundary_audit_record_exit(g_recomp_stack[g_recomp_stack_top - 1]);
     if (g_wlog_aot_slot == g_recomp_stack_top - 1) {
       wlog_scope_exit();
