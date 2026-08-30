@@ -91,6 +91,22 @@ int main(void) {
             entry == 0x0777,
         "identity-mapped store serves entries");
 
+  /* A fine-scrolled 256px viewport intersects 33 8x8 tile columns.  The
+   * 33rd entry lives in the second screen of a 64-column tilemap and is the
+   * authoritative source for a renderer chunk that straddles X=255. */
+  WsShadowReset();
+  Ppu ppu = {0};
+  ppu.bgXsc[0] = 1; /* 64x32 map at VRAM word address 0. */
+  ppu.hScroll[0] = 1;
+  ppu.vram[0x400] = 0x4321;
+  WsShadowSetWorld(0, 1, 0);
+  WsShadowSetCaptureWorld(0, 1, 0);
+  WsShadowSetScroll(0, 1, 0);
+  WsShadowFrame(&ppu);
+  entry = 0;
+  Check(WsShadowDebugCell(0, 32, 0, &entry) == 1 && entry == 0x4321,
+        "fine-scrolled wide viewport captures its partial 33rd tile");
+
   if (g_failures) {
     printf("%d failure(s)\n", g_failures);
     return 1;

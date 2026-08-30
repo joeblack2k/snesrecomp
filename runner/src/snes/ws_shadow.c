@@ -10,7 +10,11 @@ enum { kLayers = 2 };
 
 enum {
   kWsWestKeep = 12, /* ~192px; gutter + wide platforms */
-  kWsLiveMaxCols = 32,
+  /* A 256px viewport covers 32 complete 8x8 tiles only when its fine X
+   * phase is zero.  At every other phase it intersects a 33rd tile.  Wide
+   * 64-column maps can provide that live overhang and must retain it so a
+   * renderer chunk straddling X=255 does not fall through to margin data. */
+  kWsLiveMaxCols = 33,
   kWsLiveMaxRows = 32,
   kWsLiveDyMax = 8
 };
@@ -124,6 +128,11 @@ enum {
    * cartridge viewport captured from VRAM. v1 cells may be keyed by a host
    * edge bias and must be rebuilt rather than silently restored. */
   kWsSnapshotVersion = 2,
+  /* Keep the v2 binary format stable.  The runtime's partial 33rd column is
+   * authoritative live PPU state and is recaptured on the first frame after
+   * load; retaining only the original 32 columns avoids invalidating every
+   * existing host-extended save state. */
+  kWsSnapshotLiveMaxCols = 32,
 };
 
 typedef struct WsShadowSnapshotHeader {
@@ -149,8 +158,8 @@ typedef struct WsShadowLayerSnapshot {
   uint32_t originShift;
   int32_t prevLiveCols, prevLiveRows;
   uint32_t prevLiveTx0, prevScrollY;
-  uint16_t prevLive[kWsLiveMaxCols * kWsLiveMaxRows];
-  uint8_t prevLiveOcc[kWsLiveMaxCols * kWsLiveMaxRows];
+  uint16_t prevLive[kWsSnapshotLiveMaxCols * kWsLiveMaxRows];
+  uint8_t prevLiveOcc[kWsSnapshotLiveMaxCols * kWsLiveMaxRows];
 } WsShadowLayerSnapshot;
 
 typedef struct WsShadowCellSnapshot {
@@ -834,12 +843,20 @@ bool WsShadowSnapshotSave(void *data, size_t size) {
     state.originTx = layer->originTx;
     state.originTy = layer->originTy;
     state.originShift = layer->originShift;
-    state.prevLiveCols = layer->prevLiveCols;
+    state.prevLiveCols = layer->prevLiveCols < kWsSnapshotLiveMaxCols
+                             ? layer->prevLiveCols
+                             : kWsSnapshotLiveMaxCols;
     state.prevLiveRows = layer->prevLiveRows;
     state.prevLiveTx0 = layer->prevLiveTx0;
     state.prevScrollY = layer->prevScrollY;
-    memcpy(state.prevLive, layer->prevLive, sizeof state.prevLive);
-    memcpy(state.prevLiveOcc, layer->prevLiveOcc, sizeof state.prevLiveOcc);
+    for (int row = 0; row < kWsLiveMaxRows; row++) {
+      for (int col = 0; col < kWsSnapshotLiveMaxCols; col++) {
+        const int snapshot_index = row * kWsSnapshotLiveMaxCols + col;
+        const int live_index = row * kWsLiveMaxCols + col;
+        state.prevLive[snapshot_index] = layer->prevLive[live_index];
+        state.prevLiveOcc[snapshot_index] = layer->prevLiveOcc[live_index];
+      }
+    }
     memcpy(cursor, &state, sizeof state);
     cursor += sizeof state;
 
@@ -909,8 +926,16 @@ static void RestoreLayerState(WsShadowLayer *layer,
   layer->prevLiveRows = state->prevLiveRows;
   layer->prevLiveTx0 = state->prevLiveTx0;
   layer->prevScrollY = state->prevScrollY;
-  memcpy(layer->prevLive, state->prevLive, sizeof layer->prevLive);
-  memcpy(layer->prevLiveOcc, state->prevLiveOcc, sizeof layer->prevLiveOcc);
+  memset(layer->prevLive, 0, sizeof layer->prevLive);
+  memset(layer->prevLiveOcc, 0, sizeof layer->prevLiveOcc);
+  for (int row = 0; row < kWsLiveMaxRows; row++) {
+    for (int col = 0; col < kWsSnapshotLiveMaxCols; col++) {
+      const int snapshot_index = row * kWsSnapshotLiveMaxCols + col;
+      const int live_index = row * kWsLiveMaxCols + col;
+      layer->prevLive[live_index] = state->prevLive[snapshot_index];
+      layer->prevLiveOcc[live_index] = state->prevLiveOcc[snapshot_index];
+    }
+  }
   layer->foldVram = NULL;
   memset(layer->foldRow, 0, sizeof layer->foldRow);
 }
@@ -937,7 +962,8 @@ bool WsShadowSnapshotLoad(const void *data, size_t size) {
     cursor += sizeof state;
     if (state.cellCount > capacity ||
         state.tileShift > 4 || state.originShift > 4 ||
-        state.prevLiveCols < 0 || state.prevLiveCols > kWsLiveMaxCols ||
+        state.prevLiveCols < 0 ||
+        state.prevLiveCols > kWsSnapshotLiveMaxCols ||
         state.prevLiveRows < 0 || state.prevLiveRows > kWsLiveMaxRows ||
         (size_t)(end - cursor) <
             (size_t)state.cellCount * sizeof(WsShadowCellSnapshot))
