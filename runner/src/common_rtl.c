@@ -134,6 +134,7 @@ static int16 g_audio_recovery_anchor_r;
 static int16 g_audio_last_output_l;
 static int16 g_audio_last_output_r;
 static void rtl_sync_apu_frame_boundary(void);
+static void rtl_audio_reconcile_loaded_state_locked(void);
 
 static uint64_t rtl_apu_guest_cycle(void) {
   uint64_t within = g_cpu.master_cycles - g_apu_frame_start_master;
@@ -646,6 +647,8 @@ bool RtlLoadSnapshot(const char *filename) {
         g_rtl_game_info->state_load_extra(&fs.base, hdr[1]);
     }
   }
+  if (!fs.error)
+    rtl_audio_reconcile_loaded_state_locked();
   RtlApuUnlock();
   fclose(f);
   if (fs.error) {
@@ -697,6 +700,8 @@ bool RtlLoadSnapshotFromMemory(const void *data, size_t size) {
   if (hdr[1] >= 5 && g_rtl_game_info && g_rtl_game_info->state_load_extra &&
       memory.position < size && !memory.error)
     g_rtl_game_info->state_load_extra(&memory.base, hdr[1]);
+  if (!memory.error)
+    rtl_audio_reconcile_loaded_state_locked();
   RtlApuUnlock();
   if (memory.error) return false;
   g_snes->beamMasterLast = g_cpu.master_cycles;
@@ -1396,6 +1401,42 @@ static double s_render_occ_ema = -1.0; /* burst-filtered occupancy, -1 = unset *
  * which is correct for every shipped default config, all of which open the
  * device at 32040 (or 32000, inside the servo's range). */
 static double s_render_output_rate = RTL_AUDIO_NATIVE_RATE;
+
+/* Native snapshots deliberately omit the APU port-event queue and its
+ * guest-to-SPC clock mapping (they are host scheduling state, not SNES state).
+ * The restored APU cycle counter and DSP ring are authoritative. Rebase the
+ * omitted mapping at the restored frame boundary and clear every piece of
+ * output-resampler history that belonged to the abandoned host timeline.
+ * Caller holds RtlApuLock and has already loaded the game's extra state, which
+ * restores snes_frame_counter for recomp games that serialize it. */
+static void rtl_audio_reconcile_loaded_state_locked(void) {
+  Apu *apu = g_snes->apu;
+  Dsp *dsp = apu->dsp;
+  const uint64_t guest_cycle =
+      (uint64_t)snes_frame_counter * RTL_APU_CYCLES_PER_FRAME;
+
+  apu_rebasePortTimeline(apu, guest_cycle);
+
+  g_apu_frame_time_valid = false;
+  g_apu_frame_start_master = g_cpu.master_cycles;
+  g_apu_last_sync_cycles = g_apu_pace_cycles_estimate;
+  g_apu_last_sync_master = g_cpu.master_cycles;
+  g_audio_fast_forward = false;
+  g_audio_recovery_frames = 0;
+  g_audio_recovery_remaining = 0;
+  g_audio_recovery_anchor_l = 0;
+  g_audio_recovery_anchor_r = 0;
+  g_audio_last_output_l = 0;
+  g_audio_last_output_r = 0;
+
+  s_render_phase = 0.0;
+  s_render_hold_l = 0;
+  s_render_hold_r = 0;
+  s_render_starved = 0;
+  s_render_fade_pos = 0;
+  s_render_occ_ema = -1.0;
+  audio_trace_on_timeline_reset(dsp_available(dsp));
+}
 
 /* Tell the consumer what rate the host actually opened the device at.
  *

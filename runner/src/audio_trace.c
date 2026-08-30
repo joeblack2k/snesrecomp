@@ -159,6 +159,11 @@ void audio_trace_on_output_underflow(uint32_t occupancy) {
   s_stats.occupancy_current = occupancy;
 }
 
+void audio_trace_on_timeline_reset(uint32_t occupancy) {
+  s_stats.occupancy_current = occupancy;
+  s_open_drop_event = UINT64_MAX;
+}
+
 void audio_trace_on_sample(int16_t l, int16_t r, int dropped, uint32_t ring_fill) {
   uint32_t w = (uint32_t)(s_stats.produced & (AUDIO_TRACE_PCM_RING - 1));
   s_pcm[w * 2] = l;

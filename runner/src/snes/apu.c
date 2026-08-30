@@ -64,6 +64,16 @@ void apu_clearPortQueue(Apu* apu) {
   apu->portTimeValid = false;
 }
 
+void apu_rebasePortTimeline(Apu* apu, uint64_t guest_cycle) {
+  apu->portClock = (uint64_t)apu->cycles;
+  apu_clearPortQueue(apu);
+  apu->portGuestAnchor = guest_cycle;
+  apu->portTargetAnchor = apu->portClock;
+  apu->portLastGuest = guest_cycle;
+  apu->portLastTarget = apu->portClock;
+  apu->portTimeValid = true;
+}
+
 void apu_writePortNow(Apu* apu, uint8_t port, uint8_t val) {
   port &= 3;
   apu->inPorts[port] = val;

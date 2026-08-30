@@ -203,6 +203,10 @@ void audio_trace_on_guest_sync(int frame_boundary, uint64_t cycles);
 void audio_trace_on_fast_forward_discard(uint32_t samples,
                                          uint32_t occupancy_after);
 void audio_trace_on_output_underflow(uint32_t occupancy);
+/* A savestate restores the DSP sample cursors without rewinding these
+ * process-lifetime counters. Reconcile the reported live occupancy to the
+ * restored ring while preserving cumulative production/underflow totals. */
+void audio_trace_on_timeline_reset(uint32_t occupancy);
 /* CPU<->SPC port traffic. port = 0-3. All call sites hold RtlApuLock.
  * The SPC-read / CPU-read hooks gate internally (value change or fresh
  * counterpart write); callers pass every access unconditionally. */

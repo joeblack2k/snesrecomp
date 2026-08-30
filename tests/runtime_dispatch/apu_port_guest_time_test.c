@@ -84,6 +84,23 @@ int main(void) {
   failures += check(apu->inPorts[0] == 0x00 && applied_count == 2,
                     "clear lands exactly one guest frame later");
 
+  /* A native snapshot omits the host-only queue/mapping while restoring the
+   * APU's low cycle counter. A rewind must discard future events and make the
+   * next guest frame advance one frame from the restored cycle, not from the
+   * abandoned future timeline. */
+  failures += check(apu_schedulePortWrite(apu, 2, 0x7f, 50000),
+                    "queue event from abandoned timeline");
+  apu->cycles = 1234;
+  apu->portClock = 90000;
+  apu_rebasePortTimeline(apu, 40000);
+  failures += check(apu_portQueueDepth(apu) == 0 &&
+                        apu->portClock == 1234 && apu->portTimeValid,
+                    "snapshot rebase drops future queue at restored clock");
+  failures += check(apu_runToGuestCycle(apu, 40000 + 17088, 17088),
+                    "snapshot rebase advances one restored guest frame");
+  failures += check(apu->portClock == 1234 + 17088,
+                    "snapshot rebase preserves guest-frame delta");
+
   /* A word write shares one guest timestamp. Preserve high-byte then low-byte
    * insertion order without inventing time between them. */
   apu_clearPortQueue(apu);

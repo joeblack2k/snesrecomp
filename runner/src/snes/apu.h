@@ -92,5 +92,9 @@ bool apu_finishHleTransfer(Apu* apu, uint16_t final_pc,
                            uint32_t max_cycles);
 /* Drop pending events and reset the guest-to-SPC mapping. */
 void apu_clearPortQueue(Apu* apu);
+/* Rebuild omitted host scheduling state after a native snapshot restore.
+ * The restored low APU cycle counter is a sufficient local clock origin;
+ * future timing is expressed as deltas from guest_cycle. */
+void apu_rebasePortTimeline(Apu* apu, uint64_t guest_cycle);
 
 #endif
