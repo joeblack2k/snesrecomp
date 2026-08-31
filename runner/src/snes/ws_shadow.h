@@ -179,6 +179,10 @@ uint16_t WsShadowTile(int layer, int screenX, uint32_t wrappedY,
                       uint16_t realTile);
 bool WsShadowLayerActive(int layer);
 
+/* Presented world X includes the signed 10-bit delta from the frame-latched
+ * scroll to the live per-scanline HDMA scroll, matching margin tile keys. */
+int32_t WsShadowPresentWorldX(int layer, int screenX, uint16_t hScroll);
+
 /* Latched world/scroll origins for margin pixel-phase (must match tile keys). */
 uint32_t WsShadowWorldX(int layer);
 uint32_t WsShadowWorldY(int layer);

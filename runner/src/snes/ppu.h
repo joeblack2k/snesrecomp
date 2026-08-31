@@ -212,6 +212,12 @@ struct Ppu {
   // Clamp keeps a layer in the authentic 256 columns. Mirror/repeat render
   // the authentic scanline in isolation and use it to fill the side margins.
   uint8_t wsLayerClamp, wsLayerMirror, wsLayerRepeat;
+  // Optional screen-space period for a repeated layer. Zero preserves the
+  // default 256-pixel native-frame repetition.
+  uint16_t wsLayerRepeatPeriod[4];
+  // Optional native-edge repair width for a proven periodic layer. Pixels in
+  // each edge band are sourced from the matching interior period.
+  uint8_t wsLayerRepeatEdgeRepair[4];
   // Optional scanline bands: clamp or cyclically repeat only [y0,y1).
   uint8_t wsClampY0[4], wsClampY1[4];
   uint8_t wsRepeatY0[4], wsRepeatY1[4];
@@ -544,6 +550,16 @@ void PpuSetWidescreenWindowExpansion(Ppu *ppu, uint8_t layer_mask,
 // and color-math-correct. Repeat wins if both bits are set. Re-apply per frame.
 void PpuSetWidescreenLayerMirror(Ppu *ppu, uint8_t mask);
 void PpuSetWidescreenLayerRepeat(Ppu *ppu, uint8_t mask);
+
+// Use a proven screen-space period when continuing one repeated layer into
+// the margins. Zero selects the default 256-pixel native-frame period.
+void PpuSetWidescreenLayerRepeatPeriod(Ppu *ppu, uint8_t layer,
+                                       uint16_t period);
+
+// Replace this many pixels at each native edge from the layer's proven
+// interior period. Requires a nonzero repeat period for the same layer.
+void PpuSetWidescreenLayerRepeatEdgeRepair(Ppu *ppu, uint8_t layer,
+                                           uint8_t pixels);
 
 // Apply clamp, cyclic-repeat, or stretch only on scanlines [y0,y1).
 // y1<=y0 disables. Repeat/stretch bands apply to Mode-1 4bpp and 2bpp

@@ -1247,6 +1247,27 @@ static uint16_t FoldMapEntry(const WsShadowLayer *layer, int row, int col) {
   return layer->foldVram[word & 0x7fff];
 }
 
+/* Convert a live per-scanline BG scroll back into the unwrapped world epoch
+ * captured at frame start. HDMA may move hScroll by a pixel (or more) after
+ * WsShadowSetWorld/SetScroll ran. Ignoring that delta makes a margin tile
+ * straddling an 8-pixel boundary alternate between adjacent world cells even
+ * while the camera is stationary. */
+static int32_t WidescreenScrollDelta(uint16_t live, uint32_t anchor) {
+  int32_t delta = (int32_t)(((uint32_t)live - anchor) & 0x03ffu);
+  if (delta >= 0x0200)
+    delta -= 0x0400;
+  return delta;
+}
+
+int32_t WsShadowPresentWorldX(int layerIndex, int screenX,
+                              uint16_t hScroll) {
+  if (layerIndex < 0 || layerIndex >= kLayers)
+    return screenX;
+  const WsShadowLayer *layer = &s_layers[layerIndex];
+  return (int32_t)layer->worldX + screenX +
+         WidescreenScrollDelta(hScroll, layer->scrollX);
+}
+
 /* Detect the row's horizontal period over the native 32-column window
  * anchored at natCol. Only natively displayed columns are trusted: they
  * are correct-by-definition on this very line, so a fold anchored there
@@ -1300,7 +1321,7 @@ uint16_t WsShadowTile(int layerIndex, int screenX, uint32_t wrappedY,
    * period inferred from a feature-free native window can no longer
    * paint filler over known feature cells. */
   const uint32_t shift = layer->tileShift ? layer->tileShift : 3;
-  int32_t worldX = (int32_t)layer->worldX + screenX;
+  int32_t worldX = WsShadowPresentWorldX(layerIndex, screenX, hScroll);
   int32_t worldY =
       layer->retainHistory
           ? (int32_t)(((wrappedY - layer->scrollY) & 0x3ff) +

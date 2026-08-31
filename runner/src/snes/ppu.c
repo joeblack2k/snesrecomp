@@ -147,6 +147,9 @@ static inline void PpuResetLayerPolicies(Ppu *ppu) {
   ppu->wsLayerClamp = 0;
   ppu->wsLayerMirror = 0;
   ppu->wsLayerRepeat = 0;
+  memset(ppu->wsLayerRepeatPeriod, 0, sizeof(ppu->wsLayerRepeatPeriod));
+  memset(ppu->wsLayerRepeatEdgeRepair, 0,
+         sizeof(ppu->wsLayerRepeatEdgeRepair));
   memset(ppu->wsClampY0, 0, sizeof(ppu->wsClampY0));
   memset(ppu->wsClampY1, 0, sizeof(ppu->wsClampY1));
   memset(ppu->wsRepeatY0, 0, sizeof(ppu->wsRepeatY0));
@@ -310,6 +313,23 @@ void PpuSetWidescreenLayerMirror(Ppu *ppu, uint8_t mask) {
 
 void PpuSetWidescreenLayerRepeat(Ppu *ppu, uint8_t mask) {
   ppu->wsLayerRepeat = mask;
+}
+
+void PpuSetWidescreenLayerRepeatPeriod(Ppu *ppu, uint8_t layer,
+                                       uint16_t period) {
+  if (layer >= 4)
+    return;
+  ppu->wsLayerRepeatPeriod[layer] =
+      period <= kPpuXPixels ? period : kPpuXPixels;
+}
+
+void PpuSetWidescreenLayerRepeatEdgeRepair(Ppu *ppu, uint8_t layer,
+                                           uint8_t pixels) {
+  if (layer >= 4)
+    return;
+  const uint16_t period = ppu->wsLayerRepeatPeriod[layer];
+  ppu->wsLayerRepeatEdgeRepair[layer] =
+      period != 0 && pixels < period ? pixels : 0;
 }
 
 void PpuSetWidescreenLayerClampBand(Ppu *ppu, uint8_t layer, uint8_t y0,
@@ -886,8 +906,8 @@ static void PpuDrawBackgroundBig(Ppu *ppu, PpuPixelPrioBufs *dstbuf, uint y,
         tile = WsShadowTile((int)layer, screen_x, (uint32_t)sy,
                             (uint16_t)ppu->hScroll[layer],
                             (uint16_t)(sc & 0x7fff), tile);
-        const int32_t wpx =
-            (int32_t)WsShadowWorldX((int)layer) + screen_x;
+        const int32_t wpx = WsShadowPresentWorldX(
+            (int)layer, screen_x, (uint16_t)ppu->hScroll[layer]);
         const int32_t wpy =
             (int32_t)WsShadowPresentWorldY((int)layer, screen_x) +
             (int32_t)((sy - WsShadowScrollY((int)layer)) & 0x3ff);
@@ -1325,25 +1345,38 @@ static void PpuDrawBackground_4bpp_mosaic(Ppu *ppu,
 // sprites. `repeat` selects cyclic continuation; otherwise reflect the edge.
 static void PpuMergePaddedBackground(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
                                      const PpuPixelPrioBufs *layerbuf,
-                                     bool repeat, bool full_budget) {
+                                     uint layer, bool repeat,
+                                     bool full_budget) {
   PpuZbufType *dst = dstbuf->data;
   const PpuZbufType *src = layerbuf->data;
+  int repeat_period = ppu->wsLayerRepeatPeriod[layer];
+  if (repeat_period == 0)
+    repeat_period = kPpuXPixels;
+  const int edge_repair = ppu->wsLayerRepeatEdgeRepair[layer];
   int left_extra = full_budget ? ppu->extraLeftRight : ppu->extraLeftCur;
   int right_extra = full_budget ? ppu->extraLeftRight : ppu->extraRightCur;
   for (int x = 0; x < kPpuXPixels; x++) {
     int i = x + kPpuExtraLeftRight;
-    if (src[i] > dst[i]) dst[i] = src[i];
+    int sx = x;
+    if (repeat && edge_repair != 0) {
+      if (x < edge_repair)
+        sx += repeat_period;
+      else if (x >= kPpuXPixels - edge_repair)
+        sx -= repeat_period;
+    }
+    int si = sx + kPpuExtraLeftRight;
+    if (src[si] > dst[i]) dst[i] = src[si];
   }
   for (int x = -left_extra; x < 0; x++) {
     int di = x + kPpuExtraLeftRight;
-    int sx = repeat ? kPpuXPixels + x : -x;
+    int sx = repeat ? (x % repeat_period + repeat_period) % repeat_period : -x;
     int si = sx + kPpuExtraLeftRight;
     if (src[si] > dst[di]) dst[di] = src[si];
   }
   for (int x = kPpuXPixels;
        x < kPpuXPixels + right_extra; x++) {
     int di = x + kPpuExtraLeftRight;
-    int sx = repeat ? x - kPpuXPixels : kPpuXPixels * 2 - 2 - x;
+    int sx = repeat ? x % repeat_period : kPpuXPixels * 2 - 2 - x;
     int si = sx + kPpuExtraLeftRight;
     if (src[si] > dst[di]) dst[di] = src[si];
   }
@@ -1399,7 +1432,7 @@ static void PpuDrawBackground_4bpp_policy(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
   if (stretch_band) {
     PpuMergeStretchedBackground(ppu, dstbuf, &layerbuf);
   } else {
-    PpuMergePaddedBackground(ppu, dstbuf, &layerbuf,
+    PpuMergePaddedBackground(ppu, dstbuf, &layerbuf, layer,
                              repeat_band ||
                              (ppu->wsLayerRepeat & (1u << layer)) != 0,
                              repeat_band);
@@ -1438,7 +1471,7 @@ static void PpuDrawBackground_2bpp_policy(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
   if (stretch_band) {
     PpuMergeStretchedBackground(ppu, dstbuf, &layerbuf);
   } else {
-    PpuMergePaddedBackground(ppu, dstbuf, &layerbuf,
+    PpuMergePaddedBackground(ppu, dstbuf, &layerbuf, layer,
                              repeat_band ||
                              (ppu->wsLayerRepeat & (1u << layer)) != 0,
                              repeat_band);
