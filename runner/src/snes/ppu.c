@@ -295,6 +295,9 @@ static inline void PpuResetLayerPolicies(Ppu *ppu) {
   ppu->wsLayerClamp = 0;
   ppu->wsLayerMirror = 0;
   ppu->wsLayerRepeat = 0;
+  ppu->wsMirrorAxisMask = 0;
+  memset(ppu->wsMirrorAxisLeft, 0, sizeof(ppu->wsMirrorAxisLeft));
+  memset(ppu->wsMirrorAxisRight, 0, sizeof(ppu->wsMirrorAxisRight));
   memset(ppu->wsClampY0, 0, sizeof(ppu->wsClampY0));
   memset(ppu->wsClampY1, 0, sizeof(ppu->wsClampY1));
   memset(ppu->wsRepeatY0, 0, sizeof(ppu->wsRepeatY0));
@@ -464,6 +467,23 @@ void PpuSetWidescreenLayerMirror(Ppu *ppu, uint8_t mask) {
 
 void PpuSetWidescreenLayerRepeat(Ppu *ppu, uint8_t mask) {
   ppu->wsLayerRepeat = mask;
+}
+
+void PpuSetWidescreenLayerMirrorAxis(Ppu *ppu, uint8_t layer, int left_axis,
+                                     int right_axis) {
+  if (layer >= 4)
+    return;
+  // Clamp to the priority-buffer capacity; an axis at or beyond the rendered
+  // span on its side reflects nothing there.
+  left_axis = IntMax(left_axis, -kPpuExtraLeftRight);
+  right_axis = IntMin(right_axis, kPpuXPixels + kPpuExtraLeftRight);
+  if (left_axis > right_axis) {
+    ppu->wsMirrorAxisMask &= (uint8_t)~(1u << layer);
+    return;
+  }
+  ppu->wsMirrorAxisLeft[layer] = (int16_t)left_axis;
+  ppu->wsMirrorAxisRight[layer] = (int16_t)right_axis;
+  ppu->wsMirrorAxisMask |= (uint8_t)(1u << layer);
 }
 
 void PpuSetWidescreenLayerClampBand(Ppu *ppu, uint8_t layer, uint8_t y0,
@@ -1535,6 +1555,41 @@ static void PpuMergeStretchedBackground(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
   }
 }
 
+// Reflect a layer's rendered wide line about its host-set axes, then merge it
+// by priority like the padded policies. Sources always lie on the far side of
+// their axis, so an in-place copy never reads a column it already rewrote
+// unless the two reflected spans overlap (a level narrower than the margin),
+// which merely reflects already-reflected art.
+static void PpuMergeAxisMirroredBackground(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
+                                           PpuPixelPrioBufs *layerbuf,
+                                           uint layer, uint y) {
+  PpuZbufType *dst = dstbuf->data;
+  PpuZbufType *src = layerbuf->data;
+  const int lo = -PpuWidescreenLayerExtra(ppu, layer, y, ppu->extraLeftCur);
+  const int hi =
+      kPpuXPixels + PpuWidescreenLayerExtra(ppu, layer, y, ppu->extraRightCur);
+  const int left_axis = ppu->wsMirrorAxisLeft[layer];
+  const int right_axis = ppu->wsMirrorAxisRight[layer];
+  // The native 256 columns are the oracle: an axis inside them reflects
+  // outward from that line but rewrites margin columns only.
+  const int left_end = IntMin(left_axis, 0);
+  const int right_start = IntMax(right_axis, kPpuXPixels);
+  for (int x = lo; x < left_end && x < hi; x++) {
+    const int sx = 2 * left_axis - 1 - x;
+    if (sx >= lo && sx < hi)
+      src[x + kPpuExtraLeftRight] = src[sx + kPpuExtraLeftRight];
+  }
+  for (int x = IntMax(right_start, lo); x < hi; x++) {
+    const int sx = 2 * right_axis - 1 - x;
+    if (sx >= lo && sx < hi)
+      src[x + kPpuExtraLeftRight] = src[sx + kPpuExtraLeftRight];
+  }
+  for (int x = lo; x < hi; x++) {
+    const int i = x + kPpuExtraLeftRight;
+    if (src[i] > dst[i]) dst[i] = src[i];
+  }
+}
+
 static void PpuDrawBackground_4bpp_policy(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
                                           uint y, bool sub,
                                           uint layer, PpuZbufType zhi,
@@ -1542,7 +1597,11 @@ static void PpuDrawBackground_4bpp_policy(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
   uint8_t padding = ppu->wsLayerMirror | ppu->wsLayerRepeat;
   bool repeat_band = PpuWidescreenLayerRepeatBandActive(ppu, layer, y);
   bool stretch_band = PpuWidescreenLayerStretchBandActive(ppu, layer, y);
-  if (!(padding & (1u << layer)) && !repeat_band && !stretch_band) {
+  const bool axis_mirror = (ppu->wsMirrorAxisMask & (1u << layer)) != 0 &&
+                           !(padding & (1u << layer)) && !repeat_band &&
+                           !stretch_band;
+  if (!(padding & (1u << layer)) && !repeat_band && !stretch_band &&
+      !axis_mirror) {
     if (PPU_bigTiles(ppu, layer))
       PpuDrawBackgroundBig(ppu, dstbuf, y, sub, layer, 4, zhi, zlo, mosaic);
     else if (mosaic)
@@ -1562,7 +1621,9 @@ static void PpuDrawBackground_4bpp_policy(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
     PpuDrawBackground_4bpp_mosaic(ppu, &layerbuf, y, sub, layer, zhi, zlo);
   else
     PpuDrawBackground_4bpp(ppu, &layerbuf, y, sub, layer, zhi, zlo);
-  if (stretch_band) {
+  if (axis_mirror) {
+    PpuMergeAxisMirroredBackground(ppu, dstbuf, &layerbuf, layer, y);
+  } else if (stretch_band) {
     PpuMergeStretchedBackground(ppu, dstbuf, &layerbuf);
   } else {
     PpuMergePaddedBackground(ppu, dstbuf, &layerbuf,
@@ -1583,7 +1644,11 @@ static void PpuDrawBackground_2bpp_policy(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
   uint8_t padding = ppu->wsLayerMirror | ppu->wsLayerRepeat;
   bool repeat_band = PpuWidescreenLayerRepeatBandActive(ppu, layer, y);
   bool stretch_band = PpuWidescreenLayerStretchBandActive(ppu, layer, y);
-  if (!(padding & (1u << layer)) && !repeat_band && !stretch_band) {
+  const bool axis_mirror = (ppu->wsMirrorAxisMask & (1u << layer)) != 0 &&
+                           !(padding & (1u << layer)) && !repeat_band &&
+                           !stretch_band;
+  if (!(padding & (1u << layer)) && !repeat_band && !stretch_band &&
+      !axis_mirror) {
     if (PPU_bigTiles(ppu, layer))
       PpuDrawBackgroundBig(ppu, dstbuf, y, sub, layer, 2, zhi, zlo, mosaic);
     else if (mosaic)
@@ -1601,7 +1666,9 @@ static void PpuDrawBackground_2bpp_policy(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
     PpuDrawBackground_2bpp_mosaic(ppu, &layerbuf, y, sub, layer, zhi, zlo);
   else
     PpuDrawBackground_2bpp(ppu, &layerbuf, y, sub, layer, zhi, zlo);
-  if (stretch_band) {
+  if (axis_mirror) {
+    PpuMergeAxisMirroredBackground(ppu, dstbuf, &layerbuf, layer, y);
+  } else if (stretch_band) {
     PpuMergeStretchedBackground(ppu, dstbuf, &layerbuf);
   } else {
     PpuMergePaddedBackground(ppu, dstbuf, &layerbuf,

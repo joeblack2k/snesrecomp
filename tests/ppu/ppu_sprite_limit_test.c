@@ -97,6 +97,46 @@ static void setup_33_sprite_case(Ppu *ppu) {
         ppu->vram[i] = 0xffff;
 }
 
+
+/* Widescreen mirror axis: a 4bpp Mode 1 BG1 whose tile columns each carry a
+ * distinct flat color, rendered 43 pixels wide on each side. The margins wrap
+ * the 32-column map (the shadow stub above returns the real tile), so every
+ * screen column has a known color before the axis reflection is applied. */
+static void setup_mirror_axis_case(Ppu *ppu) {
+    for (int slot = 0; slot < 128; slot++)
+        ppu->oam[slot * 2] = 0xf000;
+    memset(ppu->highOam, 0, sizeof ppu->highOam);
+    memset(ppu->vram, 0, sizeof ppu->vram);
+    ppu->bgmode = 1;
+    ppu->screenEnabled[0] = 0x01;
+    ppu->screenEnabled[1] = 0x00;
+    ppu->bgXsc[0] = 0x00;      /* 32x32 tilemap at word 0 */
+    ppu->bgTileAdr = 0x01;     /* BG1 characters at word 0x1000 */
+    ppu->hScroll[0] = 0;
+    ppu->vScroll[0] = 0;
+    for (int tile = 1; tile < 16; tile++) {
+        for (int row = 0; row < 8; row++) {
+            const uint16_t lo = (uint16_t)(((tile & 1) ? 0x00ff : 0) |
+                                           ((tile & 2) ? 0xff00 : 0));
+            const uint16_t hi = (uint16_t)(((tile & 4) ? 0x00ff : 0) |
+                                           ((tile & 8) ? 0xff00 : 0));
+            ppu->vram[0x1000 + tile * 16 + row] = lo;
+            ppu->vram[0x1000 + tile * 16 + 8 + row] = hi;
+        }
+    }
+    for (int row = 0; row < 32; row++)
+        for (int col = 0; col < 32; col++)
+            ppu->vram[row * 32 + col] = (uint16_t)((col % 15) + 1);
+}
+
+static PpuZbufType bg_pixel(const Ppu *ppu, int x) {
+    return ppu->bgBuffers[0].data[x + kPpuExtraLeftRight];
+}
+
+static int expected_color(int x) {
+    return ((((x >> 3) & 31) % 15) + 1);
+}
+
 int main(void) {
     /* The shared scratch surface must also hold the live-margin cases below;
      * PPU priority buffers are wider than native even when the first tests
@@ -419,6 +459,79 @@ int main(void) {
 
     ppu_free(ppu);
     if (failures) return 1;
+
+    /* Mirror axis: reflect BG1 about screen columns -16 and 240 while the
+     * rest of the wide line keeps its rendered columns. */
+    {
+        enum { kWideExtra = 43,
+               kWidePitch = (kPpuXPixels + kWideExtra * 2) * 4 };
+        static uint8_t wide_pixels[kWidePitch * 2];
+        ppu_reset(ppu);
+        PpuBeginDrawing(ppu, wide_pixels, kWidePitch,
+                        kPpuRenderFlags_NewRenderer);
+        ppu->inidisp = 0x0f;
+        setup_mirror_axis_case(ppu);
+        PpuSetExtraSpace(ppu, kWideExtra);
+        PpuSetWidescreenLayerMask(ppu, 0x01);
+        ppu_runLine(ppu, 1);
+        int intact = 1;
+        for (int x = -kWideExtra; x < kPpuXPixels + kWideExtra; x++)
+            intact &= (bg_pixel(ppu, x) & 0xff) == expected_color(x);
+        failures += check(intact, "wide BG1 line renders every column");
+
+        PpuSetExtraSpace(ppu, kWideExtra);
+        PpuSetWidescreenLayerMask(ppu, 0x01);
+        PpuSetWidescreenLayerMirrorAxis(ppu, 0, -16, 240);
+        ppu_runLine(ppu, 1);
+        int mirrored = 1, kept = 1;
+        for (int x = -kWideExtra; x < -16; x++)
+            mirrored &= bg_pixel(ppu, x) == bg_pixel(ppu, -33 - x);
+        for (int x = kPpuXPixels; x < kPpuXPixels + kWideExtra; x++)
+            mirrored &= bg_pixel(ppu, x) == bg_pixel(ppu, 479 - x);
+        for (int x = -16; x < kPpuXPixels; x++)
+            kept &= (bg_pixel(ppu, x) & 0xff) == expected_color(x);
+        failures += check(mirrored,
+                          "margin columns past each axis reflect the far side");
+        failures += check(kept, "columns between the axes and the native "
+                                "view are untouched");
+        failures += check((bg_pixel(ppu, -17) & 0xff) == expected_color(-16) &&
+                          (bg_pixel(ppu, -43) & 0xff) == expected_color(10),
+                          "reflection is exact about the axis");
+
+        /* An axis one tile inside the native view reflects outward from that
+         * line, skipping the authored edge strip, and still leaves every
+         * native column alone. */
+        PpuSetExtraSpace(ppu, kWideExtra);
+        PpuSetWidescreenLayerMask(ppu, 0x01);
+        PpuSetWidescreenLayerMirrorAxis(ppu, 0, 8, 248);
+        ppu_runLine(ppu, 1);
+        mirrored = 1;
+        kept = 1;
+        for (int x = -kWideExtra; x < 0; x++)
+            mirrored &= bg_pixel(ppu, x) == bg_pixel(ppu, 15 - x);
+        for (int x = kPpuXPixels; x < kPpuXPixels + kWideExtra; x++)
+            mirrored &= bg_pixel(ppu, x) == bg_pixel(ppu, 495 - x);
+        for (int x = 0; x < kPpuXPixels; x++)
+            kept &= (bg_pixel(ppu, x) & 0xff) == expected_color(x);
+        failures += check(mirrored && kept,
+                          "an inset axis reflects into the margin only");
+
+        /* An axis beyond the rendered span leaves that side alone, and the
+         * policy resets with the others when the border is reapplied. */
+        PpuSetExtraSpace(ppu, kWideExtra);
+        PpuSetWidescreenLayerMask(ppu, 0x01);
+        PpuSetWidescreenLayerMirrorAxis(ppu, 0, -1000, 1000);
+        ppu_runLine(ppu, 1);
+        intact = 1;
+        for (int x = -kWideExtra; x < kPpuXPixels + kWideExtra; x++)
+            intact &= (bg_pixel(ppu, x) & 0xff) == expected_color(x);
+        failures += check(intact, "off-span axes change nothing");
+        PpuSetWidescreenLayerMirrorAxis(ppu, 0, 0, 256);
+        PpuSetExtraSpace(ppu, kWideExtra);
+        failures += check(ppu->wsMirrorAxisMask == 0,
+                          "mirror axes reset with the layer policies");
+    }
+
     puts("ppu_sprite_limit_test: PASS");
     return 0;
 }

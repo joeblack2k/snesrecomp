@@ -219,6 +219,12 @@ struct Ppu {
   // Clamp keeps a layer in the authentic 256 columns. Mirror/repeat render
   // the authentic scanline in isolation and use it to fill the side margins.
   uint8_t wsLayerClamp, wsLayerMirror, wsLayerRepeat;
+  // Optional per-layer mirror axes (see PpuSetWidescreenLayerMirrorAxis).
+  // After a layer's wide scanline is drawn, columns left of wsMirrorAxisLeft
+  // and at or right of wsMirrorAxisRight reflect the columns on the other
+  // side of that axis. Bit L of wsMirrorAxisMask enables the pair for BG(L+1).
+  uint8_t wsMirrorAxisMask;
+  int16_t wsMirrorAxisLeft[4], wsMirrorAxisRight[4];
   // Optional scanline bands: clamp or cyclically repeat only [y0,y1).
   uint8_t wsClampY0[4], wsClampY1[4];
   uint8_t wsRepeatY0[4], wsRepeatY1[4];
@@ -565,6 +571,24 @@ void PpuSetWidescreenWindowExpansion(Ppu *ppu, uint8_t layer_mask,
 // and color-math-correct. Repeat wins if both bits are set. Re-apply per frame.
 void PpuSetWidescreenLayerMirror(Ppu *ppu, uint8_t mask);
 void PpuSetWidescreenLayerRepeat(Ppu *ppu, uint8_t mask);
+// Reflect one layer's rendered wide scanline about two screen columns: pixels
+// at x < left_axis take the value rendered at 2*left_axis-1-x, and pixels at
+// x >= right_axis take 2*right_axis-1-x, whenever that source column was
+// rendered. Columns between the axes keep their rendered pixels (the native
+// view and any world-keyed margin), so a game whose visible margin runs past
+// an authored level wall continues it with the mirrored authored art instead
+// of shifting the presented view or repeating the native edge. Screen
+// coordinates: 0..255 is the native view, negative is the left margin. The
+// native 256 columns are never rewritten: an axis inside them reflects
+// outward from that line into the margin only, which lets a game skip an
+// authored edge strip (map columns hidden in CRT overscan) without touching
+// its authentic center. Pass an axis beyond the rendered span to leave that
+// side untouched. Ignored for a
+// layer that also carries a clamp/mirror/repeat policy or an active
+// repeat/stretch band (those synthesize their margins). Reset each frame with
+// the other layer policies.
+void PpuSetWidescreenLayerMirrorAxis(Ppu *ppu, uint8_t layer, int left_axis,
+                                     int right_axis);
 
 // Apply clamp, cyclic-repeat, or stretch only on scanlines [y0,y1).
 // y1<=y0 disables. Repeat/stretch bands apply to Mode-1 4bpp and 2bpp
