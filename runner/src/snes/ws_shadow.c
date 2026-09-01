@@ -52,6 +52,8 @@ typedef struct WsShadowLayer {
    * margin refill, or the object is erased outside the native window. */
   int respectGameWrites;
   bool rejectEastEcho;
+  /* Nonzero: this layer is a read-only view of s_layers[aliasPlus1 - 1]. */
+  int aliasPlus1;
   uint16_t retainMapBase;
   bool haveRetainMapBase;
   uint8_t *cooldown;
@@ -83,6 +85,7 @@ static WsShadowMarginStat s_marginStats[kLayers];
 
 static bool GetEntry(const WsShadowLayer *layer, uint32_t tx, uint32_t ty,
                      uint16_t *entry);
+static WsShadowLayer *EntryStore(WsShadowLayer *layer);
 
 void WsShadowGetMarginStats(int layerIndex, WsShadowMarginStat *out) {
   if (!out)
@@ -99,7 +102,8 @@ bool WsShadowLookupWorldTile(int layerIndex, uint32_t worldTileX,
                              uint32_t worldTileY, uint16_t *entry) {
   if (!entry || layerIndex < 0 || layerIndex >= kLayers)
     return false;
-  return GetEntry(&s_layers[layerIndex], worldTileX, worldTileY, entry);
+  return GetEntry(EntryStore(&s_layers[layerIndex]), worldTileX, worldTileY,
+                  entry);
 }
 
 static bool InBounds(uint32_t tx, uint32_t ty) {
@@ -156,6 +160,14 @@ static void ClearEntry(WsShadowLayer *layer, uint32_t tx, uint32_t ty) {
   layer->valid[i >> 3] &= (uint8_t)~(1u << (i & 7));
 }
 
+/* The layer whose entries serve a lookup: the layer itself, or the owner it
+ * was registered as a view of. Keys (world/scroll) always stay per layer. */
+static WsShadowLayer *EntryStore(WsShadowLayer *layer) {
+  if (layer->aliasPlus1 > 0 && layer->aliasPlus1 <= kLayers)
+    return &s_layers[layer->aliasPlus1 - 1];
+  return layer;
+}
+
 static bool IsLiveOpaque(uint16_t tile) {
   return tile != 0 && tile != 0x0200u && tile != 0x0DAEu;
 }
@@ -173,6 +185,7 @@ void WsShadowReset(void) {
     layer->registered = false;
     layer->active = false;
     layer->fold = false;
+    layer->aliasPlus1 = 0;
     layer->worldSet = false;
     layer->haveLastOrigin = false;
     layer->haveRetainMapBase = false;
@@ -216,6 +229,7 @@ void WsShadowSetWorld(int layerIndex, uint32_t worldX, uint32_t worldY) {
   }
   layer->registered = true;
   layer->worldSet = true;
+  layer->aliasPlus1 = 0;
   if (worldX != layer->worldX)
     layer->dir = ((int32_t)(worldX - layer->worldX) > 0) ? 1 : -1;
   layer->worldX = worldX;
@@ -230,6 +244,32 @@ void WsShadowSetScroll(int layerIndex, uint32_t scrollX, uint32_t scrollY) {
   WsShadowLayer *layer = &s_layers[layerIndex];
   layer->scrollX = scrollX;
   layer->scrollY = scrollY;
+}
+
+void WsShadowSetEntryAlias(int layerIndex, int sourceLayer, uint32_t worldX,
+                           uint32_t worldY, uint32_t scrollX,
+                           uint32_t scrollY) {
+  if (layerIndex < 0 || layerIndex >= kLayers)
+    return;
+  WsShadowLayer *layer = &s_layers[layerIndex];
+  if (sourceLayer < 0 || sourceLayer >= kLayers || sourceLayer == layerIndex) {
+    layer->aliasPlus1 = 0;
+    return;
+  }
+  layer->aliasPlus1 = sourceLayer + 1;
+  layer->registered = true;
+  layer->worldSet = true;
+  layer->fold = false;
+  layer->worldX = worldX;
+  layer->worldY = worldY;
+  layer->scrollX = scrollX;
+  layer->scrollY = scrollY;
+}
+
+void WsShadowClearEntryAlias(int layerIndex) {
+  if (layerIndex < 0 || layerIndex >= kLayers)
+    return;
+  s_layers[layerIndex].aliasPlus1 = 0;
 }
 
 /* World y-tile for a map row, using the anchor's 32-row wrap window. */
@@ -249,7 +289,7 @@ static uint32_t WorldRowForMapRow(const WsShadowLayer *layer, int row) {
 void WsShadowOnVramWrite(uint16_t wordAdr, uint16_t value) {
   for (int i = 0; i < kLayers; i++) {
     WsShadowLayer *layer = &s_layers[i];
-    if (!layer->active || !layer->entries)
+    if (!layer->active || !layer->entries || layer->aliasPlus1)
       continue;
     uint16_t off = (uint16_t)(wordAdr - layer->mapBaseWord);
     if (off >= (layer->wide ? 0x800 : 0x400))
@@ -341,10 +381,11 @@ void WsShadowPrefillTile(int layerIndex, uint32_t worldTileX,
                          uint32_t worldTileY, uint16_t entry) {
   if (layerIndex < 0 || layerIndex >= kLayers)
     return;
-  WsShadowLayer *layer = &s_layers[layerIndex];
+  WsShadowLayer *view = &s_layers[layerIndex];
+  WsShadowLayer *layer = EntryStore(view);
   if (layer->retainHistory)
     return;
-  if (layer->entries && (layer->active || layer->registered)) {
+  if (layer->entries && (view->active || view->registered)) {
     uint16_t cur;
     if (!GetEntry(layer, worldTileX, worldTileY, &cur)) {
       SetEntryGuess(layer, worldTileX, worldTileY, entry);
@@ -366,7 +407,7 @@ int WsShadowDebugCell(int layerIndex, uint32_t worldTileX, uint32_t worldTileY,
                       uint16_t *entry) {
   if (layerIndex < 0 || layerIndex >= kLayers)
     return 0;
-  const WsShadowLayer *layer = &s_layers[layerIndex];
+  const WsShadowLayer *layer = EntryStore(&s_layers[layerIndex]);
   uint16_t e = 0;
   if (!GetEntry(layer, worldTileX, worldTileY, &e))
     return 0;
@@ -389,10 +430,11 @@ void WsShadowForceTile(int layerIndex, uint32_t worldTileX,
                        uint32_t worldTileY, uint16_t entry) {
   if (layerIndex < 0 || layerIndex >= kLayers)
     return;
-  WsShadowLayer *layer = &s_layers[layerIndex];
+  WsShadowLayer *view = &s_layers[layerIndex];
+  WsShadowLayer *layer = EntryStore(view);
   if (layer->retainHistory)
     return;
-  if (!layer->entries || !(layer->active || layer->registered))
+  if (!layer->entries || !(view->active || view->registered))
     return;
   /* Yield to a recent game write (dynamic BG object drawn in the margin
    * through widened object windows). Stamp 0 doubles as "never written";
@@ -969,6 +1011,11 @@ void WsShadowFrame(const struct Ppu *ppu) {
     layer->wide = PPU_bgTilemapWider(ppu, i) != 0;
     layer->tileShift = PPU_bigTiles(ppu, i) ? 4 : 3;
     layer->worldSet = false;
+    if (layer->aliasPlus1) {
+      /* A view has no store of its own; the owner captures its viewport. */
+      layer->mapBaseWord = (uint16_t)PPU_bgTilemapAdr(ppu, i);
+      continue;
+    }
     if (layer->fold) {
       layer->foldVram = ppu->vram;
       memset(layer->foldRow, 0, sizeof(layer->foldRow));
@@ -1301,9 +1348,10 @@ uint16_t WsShadowTile(int layerIndex, int screenX, uint32_t wrappedY,
   /*
    * The 8x8 background renderers call once per tile chunk. A hardware window
    * can make the final chunk start inside the native viewport but extend into
-   * the right margin (for example x=255..262). Treat that whole straddling
-   * chunk as world-keyed shadow data; returning the circular VRAM tile inserts
-   * an exact one-tile seam before margin rendering begins.
+   * the right margin (for example x=255..262). Return the world-keyed shadow
+   * tile for that chunk so the renderer has both candidates. The normal 4bpp
+   * path selects between them per pixel: cartridge data remains authoritative
+   * inside X=0..255 and shadow data begins exactly at the margin boundary.
    */
   const int tile_pixels = 1 << (layer->tileShift ? layer->tileShift : 3);
   if (!layer->active ||
@@ -1328,9 +1376,10 @@ uint16_t WsShadowTile(int layerIndex, int screenX, uint32_t wrappedY,
                       (layer->scrollY & ((1u << shift) - 1)))
           : (int32_t)(layer->worldY +
                       ((wrappedY - layer->scrollY) & 0x3ff));
-  if (layer->entries && worldX >= 0 && worldY >= 0) {
+  const WsShadowLayer *store = EntryStore(layer);
+  if (store->entries && worldX >= 0 && worldY >= 0) {
     uint16_t entry;
-    const bool hit = GetEntry(layer, (uint32_t)worldX >> shift,
+    const bool hit = GetEntry(store, (uint32_t)worldX >> shift,
                               (uint32_t)worldY >> shift, &entry);
     /* Always-on margin hit/miss accounting, split by side. Cheap counters, no
      * arming: without them "the gutter looks the same" is indistinguishable
@@ -1367,12 +1416,12 @@ uint16_t WsShadowTile(int layerIndex, int screenX, uint32_t wrappedY,
     }
   }
 
-  if (layer->blankTilePlus1) {
+  if (store->blankTilePlus1) {
     if (screenX < 0)
       s_marginStats[layerIndex].westBlank++;
     else
       s_marginStats[layerIndex].eastBlank++;
-    return (uint16_t)(layer->blankTilePlus1 - 1);
+    return (uint16_t)(store->blankTilePlus1 - 1);
   }
   if (screenX < 0)
     s_marginStats[layerIndex].westRawFallback++;
@@ -1384,7 +1433,8 @@ uint16_t WsShadowTile(int layerIndex, int screenX, uint32_t wrappedY,
 bool WsShadowLayerActive(int layerIndex) {
   return layerIndex >= 0 && layerIndex < kLayers &&
          s_layers[layerIndex].active &&
-         (s_layers[layerIndex].fold || s_layers[layerIndex].entries);
+         (s_layers[layerIndex].fold || s_layers[layerIndex].entries ||
+          s_layers[layerIndex].aliasPlus1);
 }
 
 uint32_t WsShadowWorldX(int layerIndex) {

@@ -212,6 +212,10 @@ struct Ppu {
   // Clamp keeps a layer in the authentic 256 columns. Mirror/repeat render
   // the authentic scanline in isolation and use it to fill the side margins.
   uint8_t wsLayerClamp, wsLayerMirror, wsLayerRepeat;
+  // Repeat layers whose per-line period is measured from the rendered
+  // interior pixels (see PpuSetWidescreenLayerRepeatAutoPeriod). Bit L
+  // refers to BG(L+1).
+  uint8_t wsLayerRepeatAutoPeriod, wsLayerRepeatAutoEdgeRepair;
   // Optional screen-space period for a repeated layer. Zero preserves the
   // default 256-pixel native-frame repetition.
   uint16_t wsLayerRepeatPeriod[4];
@@ -268,6 +272,10 @@ struct Ppu {
   uint8_t brightnessMult[32 + 31];
   uint8_t brightnessMultHalf[32 * 2];
   uint8_t mosaicModulo[kPpuXPixels];
+
+  /* Host-only presentation-camera correction. It shifts decoded OBJ X but
+   * is outside the serialized PPU snapshot and never affects game logic. */
+  int16_t wsPresentationXBias;
 
   // Host-only widescreen state; excluded from savestates and cleared by reset.
   PpuWidescreenLineEnhancer *widescreenLineEnhancer;
@@ -362,20 +370,39 @@ static inline bool PpuWidescreenLineRepeatBandActive(const Ppu *ppu, int y) {
   return false;
 }
 
+// A presentation bias moves the authentic 4:3 viewport partly into the host
+// margin: bias > 0 places its first `bias` columns left of screen X=0, and
+// bias < 0 places its last columns right of X=255. A repeated layer renders
+// those columns from real VRAM, exactly as the unbiased frame would, so the
+// presented 4:3 region never depends on a repeat approximation.
+static inline int PpuWidescreenRepeatAuthenticExtra(const Ppu *ppu,
+                                                    bool right_side,
+                                                    int extra) {
+  int authentic = right_side ? -ppu->wsPresentationXBias
+                             : ppu->wsPresentationXBias;
+  if (authentic < 0)
+    authentic = 0;
+  return authentic < extra ? authentic : extra;
+}
+
 static inline int PpuWidescreenLayerExtra(
-    const Ppu *ppu, unsigned int layer, int y, int extra) {
+    const Ppu *ppu, unsigned int layer, int y, int extra, bool right_side) {
   if (layer < 4) {
-    if (ppu->wsLayerWidenMask &&
-        !(ppu->wsLayerWidenMask & (1u << layer)))
-      return 0;
-    if ((ppu->wsLayerClamp | ppu->wsLayerMirror | ppu->wsLayerRepeat) &
-        (1u << layer))
+    if ((ppu->wsLayerClamp | ppu->wsLayerMirror) & (1u << layer))
       return 0;
     if (ppu->wsClampY1[layer] > ppu->wsClampY0[layer] &&
         y >= ppu->wsClampY0[layer] && y < ppu->wsClampY1[layer])
       return 0;
-    if (PpuWidescreenLayerRepeatBandActive(ppu, layer, y) ||
-        PpuWidescreenLayerStretchBandActive(ppu, layer, y))
+    // A repeated layer is normally outside the widen mask (it is bounded),
+    // yet it must still render the authentic 4:3 columns that a
+    // presentation bias moved into the margin; decide that before the mask.
+    if ((ppu->wsLayerRepeat & (1u << layer)) ||
+        PpuWidescreenLayerRepeatBandActive(ppu, layer, y))
+      return PpuWidescreenRepeatAuthenticExtra(ppu, right_side, extra);
+    if (ppu->wsLayerWidenMask &&
+        !(ppu->wsLayerWidenMask & (1u << layer)))
+      return 0;
+    if (PpuWidescreenLayerStretchBandActive(ppu, layer, y))
       return 0;
   }
   if (layer != 2)
@@ -461,6 +488,10 @@ void PpuSetExtraSpaceCentered(Ppu *ppu, uint8_t budget);
 // scroll/room-bounds state drives the visible margin dynamically (Zelda),
 // versus PpuSetExtraSpace's fixed symmetric border (SMW).
 void PpuSetExtraSideSpace(Ppu *ppu, int left, int right, int bottom);
+
+// Shift OBJ presentation left by `bias` pixels. A game using this must apply
+// the same bias to rendered background hScroll values for alignment.
+void PpuSetWidescreenPresentationXBias(Ppu *ppu, int bias);
 
 // Widescreen HUD split (opt-in, configured by the game frontend): for
 // scanlines < height, BG3 (layer 2) is drawn as three chunks — source
@@ -558,6 +589,18 @@ void PpuSetWidescreenLayerRepeatPeriod(Ppu *ppu, uint8_t layer,
 
 // Replace this many pixels at each native edge from the layer's proven
 // interior period. Requires a nonzero repeat period for the same layer.
+// Measure each repeated line's horizontal period from its own rendered
+// interior pixels (x=7..248) and continue that period into the margins
+// instead of restarting the line every 256 pixels. Lines without a provable
+// period (at least two repetitions of a tile-aligned period up to 120 px)
+// keep the 256-pixel repeat. Layers in edge_repair_mask also rebuild their
+// seven endpoint pixels from the same period, which corrects the stale
+// fine-scroll columns of a bounded backdrop kept in a 64-column allocation;
+// omit a layer from that mask when its native edges are authentic content.
+// An explicit PpuSetWidescreenLayerRepeatPeriod takes precedence.
+void PpuSetWidescreenLayerRepeatAutoPeriod(Ppu *ppu, uint8_t period_mask,
+                                           uint8_t edge_repair_mask);
+
 void PpuSetWidescreenLayerRepeatEdgeRepair(Ppu *ppu, uint8_t layer,
                                            uint8_t pixels);
 

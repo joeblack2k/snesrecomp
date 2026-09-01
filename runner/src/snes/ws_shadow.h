@@ -10,7 +10,12 @@
 // layers, and both 64-wide and streamed 32-wide tilemaps.
 enum {
   kWsShadowXTiles = 4096,
-  kWsShadowYTiles = 512,
+  /* A 10-bit PPU phase unwrapped against a tall level can legitimately
+   * select tile row 512 before the 224-pixel viewport is added. DKC2's
+   * Topsail Trouble reaches rows 512-540 at its lower camera limit. Keep a
+   * second 4096-pixel epoch so those exact world keys are retained instead
+   * of silently failing every margin prefill. */
+  kWsShadowYTiles = 1024,
 };
 
 void WsShadowReset(void);
@@ -96,6 +101,19 @@ bool WsShadowLookupWorldTile(int layer, uint32_t worldTileX,
  * 2 = prefill guess (still refreshable). *entry is set for 1/2. */
 int WsShadowDebugCell(int layer, uint32_t worldTileX, uint32_t worldTileY,
                       uint16_t *entry);
+
+/* Serve one BG layer's margin lookups from another layer's world-keyed
+ * entries. A game whose HDMA lets two physical layers display the same
+ * streamed world map on different scanline bands registers the second layer
+ * as a read-only view of the owner's store. The view keeps its own
+ * world/scroll keys, so the renderer's per-line scroll delta selects the
+ * exact world cell for whichever band that layer shows. An aliased layer
+ * captures no viewport rows, records no VRAM writes of its own, and never
+ * allocates a store. Re-register every frame, like WsShadowSetWorld. */
+void WsShadowSetEntryAlias(int layer, int sourceLayer, uint32_t worldX,
+                           uint32_t worldY, uint32_t scrollX,
+                           uint32_t scrollY);
+void WsShadowClearEntryAlias(int layer);
 
 /* When set, capture columns east of the 256px view that match any live
  * view column are cleared instead of stored — kills VRAM-wrap / period
