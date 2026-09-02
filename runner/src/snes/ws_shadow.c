@@ -1,6 +1,5 @@
 #include "ws_shadow.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -326,7 +325,18 @@ static uint32_t WorldRowForMapRow(const WsShadowLayer *layer, int row) {
  * being staged ahead (or behind, per the last travel direction). This
  * feeds freshly staged content - including first-visit world-anchored
  * features - into the history the moment it exists in VRAM. */
+static uint32_t s_pageWriteFrame[32];
+
+uint32_t WsShadowVramPageWriteFrame(unsigned page) {
+  return page < 32u ? s_pageWriteFrame[page] : 0u;
+}
+
 void WsShadowOnVramWrite(uint16_t wordAdr, uint16_t value) {
+  {
+    extern int snes_frame_counter;
+    s_pageWriteFrame[(wordAdr >> 10) & 31u] =
+        (uint32_t)snes_frame_counter + 1u;
+  }
   for (int i = 0; i < kLayers; i++) {
     WsShadowLayer *layer = &s_layers[i];
     if (!layer->active || !layer->entries || layer->aliasPlus1)

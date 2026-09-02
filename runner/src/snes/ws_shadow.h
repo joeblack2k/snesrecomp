@@ -187,6 +187,13 @@ void WsShadowFrame(const struct Ppu *ppu);
 // inactive layers/addresses.
 void WsShadowOnVramWrite(uint16_t wordAdr, uint16_t value);
 
+/* Frame stamp of the last VRAM word write into each 1024-word page (32
+ * pages), as the frame counter plus one; zero for a page never written
+ * since start. Recorded for every write, whether or not a layer is
+ * registered, so a host can tell a static, fully authored plane from a
+ * ring the cartridge keeps streaming. */
+uint32_t WsShadowVramPageWriteFrame(unsigned page);
+
 // mapWordAdr = the VRAM word address the renderer fetched realTile from
 // (used by fold mode to recover the exact map row/column, independent of
 // scroll bias and window splits). hScroll = the layer's live per-line

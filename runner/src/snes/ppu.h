@@ -225,6 +225,11 @@ struct Ppu {
   // Optional scanline bands: clamp or cyclically repeat only [y0,y1).
   uint8_t wsClampY0[4], wsClampY1[4];
   uint8_t wsRepeatY0[4], wsRepeatY1[4];
+  // Optional scanline bands: the layer's own tilemap continues into the
+  // margins as the hardware wrap of its map (a static, fully authored
+  // 64-column plane). The world-keyed shadow is bypassed like a repeat band,
+  // and no padding merge replaces the rendered margins.
+  uint8_t wsRawY0[4], wsRawY1[4];
   // Optional scanline bands: scale a native-width layer across the full
   // widescreen budget. Used for full-screen liquid/effect planes.
   uint8_t wsStretchY0[4], wsStretchY1[4];
@@ -352,6 +357,13 @@ static inline bool PpuWidescreenLayerRepeatBandActive(
   return layer < 4 &&
       ppu->wsRepeatY1[layer] > ppu->wsRepeatY0[layer] &&
       y >= ppu->wsRepeatY0[layer] && y < ppu->wsRepeatY1[layer];
+}
+
+static inline bool PpuWidescreenLayerRawBandActive(
+    const Ppu *ppu, unsigned int layer, int y) {
+  return layer < 4 &&
+      ppu->wsRawY1[layer] > ppu->wsRawY0[layer] &&
+      y >= ppu->wsRawY0[layer] && y < ppu->wsRawY1[layer];
 }
 
 static inline bool PpuWidescreenLayerStretchBandActive(
@@ -611,6 +623,12 @@ void PpuSetWidescreenLayerClampBand(Ppu *ppu, uint8_t layer, uint8_t y0,
                                     uint8_t y1);
 void PpuSetWidescreenLayerRepeatBand(Ppu *ppu, uint8_t layer, uint8_t y0,
                                      uint8_t y1);
+/* Present [y0,y1) of a layer from its own tilemap across the full host width:
+ * the map's hardware wrap serves the margins (a static, fully authored
+ * 64-column plane), the world-keyed shadow is bypassed, and no repeat merge
+ * runs. Cleared by PpuSetExtraSpace like the other bands. */
+void PpuSetWidescreenLayerRawBand(Ppu *ppu, uint8_t layer, uint8_t y0,
+                                  uint8_t y1);
 void PpuSetWidescreenLayerStretchBand(Ppu *ppu, uint8_t layer, uint8_t y0,
                                       uint8_t y1);
 

@@ -264,6 +264,62 @@ int main(void) {
         g_shadow_active = false;
     }
 
+    /* A raw band presents a 64-column map's own hardware wrap in the
+     * margins: the world shadow is bypassed like a repeat band, and no
+     * repeat of the native line replaces the rendered margin columns. */
+    {
+        enum { kExtra = 16, kWidePixels = kPpuXPixels + kExtra * 2 };
+        uint32_t wide_pixels[kWidePixels];
+
+        ppu_reset(ppu);
+        memset(wide_pixels, 0, sizeof wide_pixels);
+        PpuBeginDrawing(ppu, (uint8_t *)wide_pixels,
+                        sizeof(uint32_t) * kWidePixels,
+                        kPpuRenderFlags_NewRenderer);
+        PpuSetExtraSpace(ppu, kExtra);
+        PpuSetWidescreenLayerMask(ppu, 1);
+        PpuSetWidescreenLayerRawBand(ppu, 0, 1, 2);
+        ppu->inidisp = 0x0f;
+        ppu->bgmode = 1;
+        ppu->bgXsc[0] = 0x09;  /* 64x32 tilemap at VRAM word $0800 */
+        ppu->hScroll[0] = 0;
+        ppu->screenEnabled[0] = 1;
+        for (int i = 0; i < 32 * 32; i++) {
+            ppu->vram[0x0800 + i] = 1;  /* left page: color 1 */
+            ppu->vram[0x0c00 + i] = 2;  /* right page: color 2 */
+        }
+        for (int row = 0; row < 8; row++) {
+            ppu->vram[1 * 16 + row] = 0x00ff;
+            ppu->vram[2 * 16 + row] = 0xff00;
+        }
+        ppu->cgram[0] = 0;
+        ppu->cgram[1] = 0x001f;
+        ppu->cgram[2] = 0x03e0;
+        g_shadow_tile = 3;
+        g_shadow_active = true;
+        g_shadow_tile_calls = 0;
+
+        ppu_runLine(ppu, 0);
+        ppu_runLine(ppu, 1);
+        failures += check(g_shadow_tile_calls == 0,
+                          "raw band bypasses world shadow");
+        failures += check(wide_pixels[kExtra] != 0 &&
+                              wide_pixels[kExtra] ==
+                                  wide_pixels[kExtra + kPpuXPixels - 1],
+                          "raw band keeps the native center");
+        failures += check(wide_pixels[kExtra + kPpuXPixels] != 0 &&
+                              wide_pixels[kExtra + kPpuXPixels] !=
+                                  wide_pixels[kExtra] &&
+                              wide_pixels[kWidePixels - 1] ==
+                                  wide_pixels[kExtra + kPpuXPixels],
+                          "raw band right margin reads the map's second page");
+        failures += check(wide_pixels[0] != 0 &&
+                              wide_pixels[0] != wide_pixels[kExtra] &&
+                              wide_pixels[kExtra - 1] == wide_pixels[0],
+                          "raw band left margin reads the map's hardware wrap");
+        g_shadow_active = false;
+    }
+
     /* A repeated layer whose rendered line proves a period continues that
      * period into the margins and, when asked, rebuilds its stale endpoint
      * pixels from the same period. A 12-tile (96-pixel) map on a 32-column

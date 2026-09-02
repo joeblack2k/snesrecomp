@@ -156,6 +156,8 @@ static inline void PpuResetLayerPolicies(Ppu *ppu) {
   memset(ppu->wsClampY1, 0, sizeof(ppu->wsClampY1));
   memset(ppu->wsRepeatY0, 0, sizeof(ppu->wsRepeatY0));
   memset(ppu->wsRepeatY1, 0, sizeof(ppu->wsRepeatY1));
+  memset(ppu->wsRawY0, 0, sizeof(ppu->wsRawY0));
+  memset(ppu->wsRawY1, 0, sizeof(ppu->wsRawY1));
   memset(ppu->wsStretchY0, 0, sizeof(ppu->wsStretchY0));
   memset(ppu->wsStretchY1, 0, sizeof(ppu->wsStretchY1));
   memset(ppu->wsAnchorY0, 0, sizeof(ppu->wsAnchorY0));
@@ -359,6 +361,14 @@ void PpuSetWidescreenLayerRepeatBand(Ppu *ppu, uint8_t layer, uint8_t y0,
   if (layer < 4) {
     ppu->wsRepeatY0[layer] = y0;
     ppu->wsRepeatY1[layer] = y1;
+  }
+}
+
+void PpuSetWidescreenLayerRawBand(Ppu *ppu, uint8_t layer, uint8_t y0,
+                                  uint8_t y1) {
+  if (layer < 4) {
+    ppu->wsRawY0[layer] = y0;
+    ppu->wsRawY1[layer] = y1;
   }
 }
 
@@ -782,7 +792,8 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, PpuPixelPrioBufs *dstbuf,
    * the isolated native render; the repeat merge then changes margins only
    * and leaves the cartridge's 256-pixel center pixel-exact. */
   bool ws_shadow = WsShadowLayerActive(layer) &&
-      !PpuWidescreenLayerRepeatBandActive(ppu, layer, (int)visible_y);
+      !PpuWidescreenLayerRepeatBandActive(ppu, layer, (int)visible_y) &&
+      !PpuWidescreenLayerRawBandActive(ppu, layer, (int)visible_y);
   /* Columns the cartridge's authentic VRAM window covers this line; a host
    * presentation bias narrows it on one side (WsShadowSetNativeViewportInset). */
   const int native_left = ws_shadow ? WsShadowNativeLeft(layer) : 0;
@@ -1347,7 +1358,8 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, PpuPixelPrioBufs *dstbuf, uint y, b
    * the shadow tile outside the authentic window, the cartridge tile inside
    * it, and a per-pixel split for the chunk straddling that boundary. */
   bool ws_shadow = WsShadowLayerActive(layer) &&
-      !PpuWidescreenLayerRepeatBandActive(ppu, layer, (int)visible_y);
+      !PpuWidescreenLayerRepeatBandActive(ppu, layer, (int)visible_y) &&
+      !PpuWidescreenLayerRawBandActive(ppu, layer, (int)visible_y);
   const int native_left = ws_shadow ? WsShadowNativeLeft(layer) : 0;
   const int native_right =
       ws_shadow ? WsShadowNativeRight(layer) : kPpuXPixels;
@@ -1499,7 +1511,8 @@ static void PpuDrawBackground_4bpp_mosaic(Ppu *ppu,
   int tileadr1 = tileadr + 7 - (y & 0x7), tileadr0 = tileadr + (y & 0x7);
   const uint16 *addr;
   bool ws_shadow = WsShadowLayerActive(layer) &&
-      !PpuWidescreenLayerRepeatBandActive(ppu, layer, (int)visible_y);
+      !PpuWidescreenLayerRepeatBandActive(ppu, layer, (int)visible_y) &&
+      !PpuWidescreenLayerRawBandActive(ppu, layer, (int)visible_y);
 #define WS_TILE(t, sx) (ws_shadow ? WsShadowTile(layer, (sx), y, (uint16_t)ppu->hScroll[layer], (uint16_t)(tp - ppu->vram), (uint16_t)(t)) : (uint32)(t))
   for (size_t windex = 0; windex < win.nr; windex++) {
     if (win.bits & (1 << windex))
