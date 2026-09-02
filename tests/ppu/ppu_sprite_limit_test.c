@@ -27,6 +27,16 @@ uint16_t WsShadowTile(int layer, int screen_x, uint32_t wrapped_y,
                : real_tile;
 }
 
+int WsShadowNativeLeft(int layer) {
+    (void)layer;
+    return 0;
+}
+
+int WsShadowNativeRight(int layer) {
+    (void)layer;
+    return 256;
+}
+
 bool WsShadowLayerActive(int layer) {
     (void)layer;
     return g_shadow_active;
@@ -338,6 +348,45 @@ int main(void) {
                           "repeated layer");
         PpuSetWidescreenPresentationXBias(ppu, 0);
         PpuSetWidescreenLayerMask(ppu, 0);
+
+        /* A 64-column allocation whose second page is a stale ring page of
+         * one flat color from map column 33 on. The synthetic scroll is not
+         * shifted by the bias here, so screen x shows map pixel x+3: the
+         * authentic window [-8, 248) begins in the stale wrap of column 63
+         * and the stale endpoint column 0 (screen -8..4), and the PPU's last
+         * native columns from 253 fall on the stale page. Those must continue
+         * the authentic window's 96-pixel period instead of copying the page,
+         * while every authentic column renders as it is. */
+        ppu->bgXsc[0] = 0x01 | (0x0800 >> 8);  /* 64 columns, same base */
+        ppu->vram[0x0c00] = (uint16_t)((32 % 12) + 1);
+        for (int column = 1; column < 32; column++)
+            ppu->vram[0x0c00 + column] = 15;   /* stale second page */
+        ppu->hScroll[0] = 3;
+        PpuSetWidescreenPresentationXBias(ppu, 8);
+        PpuSetWidescreenLayerMask(ppu, 2);
+        memset(wide_pixels, 0, sizeof wide_pixels);
+        ppu_runLine(ppu, 0);
+        ppu_runLine(ppu, 1);
+        {
+            const uint32_t stale = wide_pixels[kExtra - 6];  /* map col 0 */
+            int continued = 1;
+            for (int x = 253; x < kPpuXPixels + kExtra; x++)
+                continued &= wide_pixels[kExtra + x] ==
+                                 wide_pixels[kExtra + x - 96] &&
+                             wide_pixels[kExtra + x] != stale;
+            failures += check(continued &&
+                                  wide_pixels[kExtra - 8] ==
+                                      wide_pixels[kExtra + 4] &&
+                                  wide_pixels[kExtra + 4] !=
+                                      wide_pixels[kExtra + 5] &&
+                                  wide_pixels[kExtra + 100] ==
+                                      wide_pixels[kExtra + 196],
+                              "a 64-column ring's stale tail past the "
+                              "biased authentic window is continued");
+        }
+        PpuSetWidescreenPresentationXBias(ppu, 0);
+        PpuSetWidescreenLayerMask(ppu, 0);
+        ppu->bgXsc[0] = (0x0800 >> 8);
     }
 
     /* Presentation bias is host-only and bounded by the renderer's fixed

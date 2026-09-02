@@ -200,6 +200,16 @@ bool WsShadowLayerActive(int layer);
 /* Presented world X includes the signed 10-bit delta from the frame-latched
  * scroll to the live per-scanline HDMA scroll, matching margin tile keys. */
 int32_t WsShadowPresentWorldX(int layer, int screenX, uint16_t hScroll);
+/* Mark screen columns at either end of the PPU's 256-column window that the
+ * cartridge's authentic VRAM window does not cover this frame, so lookups
+ * there use the world-keyed store instead of the raw ring. A host presenting
+ * the view shifted right by a bias passes (0, bias); shifted left, (-bias,
+ * 0). Reset by WsShadowSetWorld; re-apply after it every frame. The
+ * renderer's native/shadow pixel split follows WsShadowNativeLeft/Right. */
+void WsShadowSetNativeViewportInset(int layer, int leftPixels,
+                                    int rightPixels);
+int WsShadowNativeLeft(int layer);
+int WsShadowNativeRight(int layer);
 
 /* Latched world/scroll origins for margin pixel-phase (must match tile keys). */
 uint32_t WsShadowWorldX(int layer);

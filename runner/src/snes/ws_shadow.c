@@ -54,6 +54,13 @@ typedef struct WsShadowLayer {
   bool rejectEastEcho;
   /* Nonzero: this layer is a read-only view of s_layers[aliasPlus1 - 1]. */
   int aliasPlus1;
+  /* Screen columns at each end of the PPU's 256-column window that are NOT
+   * backed by the cartridge's authentic VRAM window this frame. A host that
+   * presents the view shifted by a bias renders the last (or first) |bias|
+   * native columns from ring cells the cartridge never wrote for them; the
+   * world-keyed store serves those instead (WsShadowSetNativeViewportInset). */
+  uint8_t nativeInsetLeft;
+  uint8_t nativeInsetRight;
   uint16_t retainMapBase;
   bool haveRetainMapBase;
   uint8_t *cooldown;
@@ -232,6 +239,8 @@ void WsShadowSetWorld(int layerIndex, uint32_t worldX, uint32_t worldY) {
   layer->aliasPlus1 = 0;
   if (worldX != layer->worldX)
     layer->dir = ((int32_t)(worldX - layer->worldX) > 0) ? 1 : -1;
+  layer->nativeInsetLeft = 0;
+  layer->nativeInsetRight = 0;
   layer->worldX = worldX;
   layer->worldY = worldY;
   layer->scrollX = worldX;
@@ -246,6 +255,33 @@ void WsShadowSetScroll(int layerIndex, uint32_t scrollX, uint32_t scrollY) {
   layer->scrollY = scrollY;
 }
 
+void WsShadowSetNativeViewportInset(int layerIndex, int leftPixels,
+                                    int rightPixels) {
+  if (layerIndex < 0 || layerIndex >= kLayers)
+    return;
+  if (leftPixels < 0) leftPixels = 0;
+  if (rightPixels < 0) rightPixels = 0;
+  if (leftPixels > 255) leftPixels = 255;
+  if (rightPixels > 255) rightPixels = 255;
+  WsShadowLayer *layer = &s_layers[layerIndex];
+  layer->nativeInsetLeft = (uint8_t)leftPixels;
+  layer->nativeInsetRight = (uint8_t)rightPixels;
+}
+
+int WsShadowNativeLeft(int layerIndex) {
+  if (layerIndex < 0 || layerIndex >= kLayers ||
+      !s_layers[layerIndex].active)
+    return 0;
+  return s_layers[layerIndex].nativeInsetLeft;
+}
+
+int WsShadowNativeRight(int layerIndex) {
+  if (layerIndex < 0 || layerIndex >= kLayers ||
+      !s_layers[layerIndex].active)
+    return 256;
+  return 256 - s_layers[layerIndex].nativeInsetRight;
+}
+
 void WsShadowSetEntryAlias(int layerIndex, int sourceLayer, uint32_t worldX,
                            uint32_t worldY, uint32_t scrollX,
                            uint32_t scrollY) {
@@ -257,6 +293,8 @@ void WsShadowSetEntryAlias(int layerIndex, int sourceLayer, uint32_t worldX,
     return;
   }
   layer->aliasPlus1 = sourceLayer + 1;
+  layer->nativeInsetLeft = 0;
+  layer->nativeInsetRight = 0;
   layer->registered = true;
   layer->worldSet = true;
   layer->fold = false;
@@ -1354,8 +1392,10 @@ uint16_t WsShadowTile(int layerIndex, int screenX, uint32_t wrappedY,
    * inside X=0..255 and shadow data begins exactly at the margin boundary.
    */
   const int tile_pixels = 1 << (layer->tileShift ? layer->tileShift : 3);
+  const int native_left = layer->nativeInsetLeft;
+  const int native_right = 256 - layer->nativeInsetRight;
   if (!layer->active ||
-      (screenX >= 0 && screenX + tile_pixels <= 256))
+      (screenX >= native_left && screenX + tile_pixels <= native_right))
     return realTile;
 
   /* Layered margin sources, exact-first: (1) the world-keyed history —
