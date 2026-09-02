@@ -625,6 +625,42 @@ int main(void) {
         g_shadow_active = false;
     }
 
+    /* A positive presentation bias shifts objects left by the bias, so a
+     * game places objects for the presented right margin up to the bias
+     * beyond the authentic margin. Such a nine-bit X is still positive:
+     * with a 16-pixel margin and a bias of 8, X = 278 presents at 270. */
+    {
+        enum { kExtra = 16, kWidePixels = kPpuXPixels + kExtra * 2 };
+        uint32_t wide_pixels[kWidePixels];
+
+        ppu_reset(ppu);
+        memset(wide_pixels, 0, sizeof wide_pixels);
+        PpuBeginDrawing(ppu, (uint8_t *)wide_pixels,
+                        sizeof(uint32_t) * kWidePixels,
+                        kPpuRenderFlags_NewRenderer);
+        PpuSetExtraSpace(ppu, kExtra);
+        PpuSetWidescreenPresentationXBias(ppu, 8);
+        ppu->inidisp = 0x0f;
+        ppu->screenEnabled[0] = 1 << 4;
+        for (int slot = 0; slot < 128; slot++)
+            ppu->oam[slot * 2] = 0xf000;
+        ppu->oam[0] = (uint16_t)(278 & 0xff);  /* y 0, x low byte */
+        ppu->highOam[0] |= 1;                    /* x bit 8 */
+        for (size_t i = 0; i < sizeof ppu->vram / sizeof ppu->vram[0]; i++)
+            ppu->vram[i] = 0xffff;
+        ppu->cgram[0] = 0;
+        for (size_t i = 1; i < sizeof ppu->cgram / sizeof ppu->cgram[0]; i++)
+            ppu->cgram[i] = 0x7fff;
+
+        ppu_runLine(ppu, 0);
+        ppu_runLine(ppu, 1);
+        failures += check(wide_pixels[kExtra + 270] != 0 &&
+                              wide_pixels[kExtra + 269] == 0,
+                          "positive bias keeps an object placed for the "
+                          "presented right margin on the right");
+        PpuSetWidescreenPresentationXBias(ppu, 0);
+    }
+
     ppu_free(ppu);
     if (failures) return 1;
     puts("ppu_sprite_limit_test: PASS");

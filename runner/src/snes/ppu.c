@@ -2291,7 +2291,13 @@ static int PpuAdjustWidescreenHudOamX(Ppu *ppu, uint8_t index, uint8_t y,
 static int PpuDecodeOamX(Ppu *ppu, uint8_t index) {
   int x = ppu->oam[index] & 0xff;
   x |= ((ppu->highOam[index >> 3] >> (index & 7)) & 1) << 8;
-  if (x >= 256 + ppu->extraRightCur) {
+  /* A positive presentation bias shifts every object left by the bias, so
+   * the game places objects for the presented right margin up to the bias
+   * beyond the authentic margin. Those X values are still positive. */
+  const int positive_limit =
+      256 + ppu->extraRightCur +
+      (ppu->wsPresentationXBias > 0 ? ppu->wsPresentationXBias : 0);
+  if (x >= positive_limit) {
     x -= 512;
   } else if (x >= 256 && ppu->wsOamRightHintStrict) {
     int slot = index >> 1;
