@@ -576,6 +576,55 @@ int main(void) {
                           "unselected world OAM remains centered");
     }
 
+    /* A 2bpp BG3 (mode 1) under the world-keyed shadow renders its margins
+     * from the shadow tile and splits the chunk straddling the authentic
+     * boundary per pixel, exactly like the 4bpp layers (DKC2's ship-deck
+     * rigging is such a layer). */
+    {
+        enum { kExtra = 16, kWidePixels = kPpuXPixels + kExtra * 2 };
+        uint32_t wide_pixels[kWidePixels];
+
+        ppu_reset(ppu);
+        memset(wide_pixels, 0, sizeof wide_pixels);
+        PpuBeginDrawing(ppu, (uint8_t *)wide_pixels,
+                        sizeof(uint32_t) * kWidePixels,
+                        kPpuRenderFlags_NewRenderer);
+        PpuSetExtraSpace(ppu, kExtra);
+        PpuSetWidescreenLayerMask(ppu, 0x04);
+        PpuSetWidescreenBg3Widen(ppu, 1);
+        ppu->inidisp = 0x0f;
+        ppu->bgmode = 1;
+        ppu->bgXsc[2] = 0x09;  /* 64x32 tilemap at VRAM word $0800 */
+        ppu->hScroll[2] = 3;   /* the last native chunk straddles x=256 */
+        ppu->screenEnabled[0] = 1 << 2;
+        /* 2bpp characters: character 1 is solid color 1, character 2 is
+         * solid color 2. Every ring column holds character 1. */
+        for (int row = 0; row < 8; row++) {
+            ppu->vram[1 * 8 + row] = 0x00ff;
+            ppu->vram[2 * 8 + row] = 0xff00;
+        }
+        ppu->cgram[0] = 0;
+        ppu->cgram[1] = 0x001f;
+        ppu->cgram[2] = 0x03e0;
+        for (int column = 0; column < 64; column++)
+            ppu->vram[0x0800 + (column & 31) + (column >= 32 ? 0x400 : 0)] = 1;
+        g_shadow_active = true;
+        g_shadow_tile = 2;
+        ppu_runLine(ppu, 0);
+        ppu_runLine(ppu, 1);
+        const uint32_t center = wide_pixels[kExtra + 8];
+        const uint32_t margin = wide_pixels[0];
+        failures += check(center != 0 && margin != 0 && center != margin &&
+                              wide_pixels[kExtra] == center &&
+                              wide_pixels[kExtra + kPpuXPixels - 1] == center &&
+                              wide_pixels[kExtra - 1] == margin &&
+                              wide_pixels[kExtra + kPpuXPixels] == margin &&
+                              wide_pixels[kWidePixels - 1] == margin,
+                          "2bpp layer renders shadow margins and splits the "
+                          "boundary chunk per pixel");
+        g_shadow_active = false;
+    }
+
     ppu_free(ppu);
     if (failures) return 1;
     puts("ppu_sprite_limit_test: PASS");

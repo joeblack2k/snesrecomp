@@ -6,7 +6,9 @@
 
 #include "ppu.h"
 
-enum { kLayers = 2 };
+/* BG1 and BG2 terrain owners plus a BG3 foreground layer (DKC2 ship-deck
+ * rigging). Games register only the layers they prove each frame. */
+enum { kLayers = 3 };
 
 enum {
   kWsWestKeep = 12, /* ~192px; gutter + wide platforms */
