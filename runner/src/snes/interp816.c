@@ -17,6 +17,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#ifndef _WIN32
+#include <time.h>
+#endif
 #include "interp816.h"
 
 static const int cyclesPerOpcode[256] = {

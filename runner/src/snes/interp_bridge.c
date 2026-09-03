@@ -12,6 +12,7 @@
 #include "superfx.h"
 #include "cx4.h"
 #include "sa1.h"
+#include "sdd1.h"
 #include "debug_server.h"
 #include "common_rtl.h"
 #include "cosim.h"  /* cosim_insn — instruction-granular lockstep (no-op unless SNES_COSIM) */
