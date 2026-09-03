@@ -12,10 +12,12 @@ enum {
   kWsShadowXTiles = 4096,
   /* A 10-bit PPU phase unwrapped against a tall level can legitimately
    * select tile row 512 before the 224-pixel viewport is added. DKC2's
-   * Topsail Trouble reaches rows 512-540 at its lower camera limit. Keep a
-   * second 4096-pixel epoch so those exact world keys are retained instead
-   * of silently failing every margin prefill. */
-  kWsShadowYTiles = 1024,
+   * Topsail Trouble reaches rows 512-540 at its lower camera limit, and
+   * Parrot Chute Panic is 13,040 pixels tall: its keys pass row 1,700 near
+   * the bottom, where a 1,024-row store silently rejected every capture
+   * and prefill and the terrain margins fell to the blank tile. Keep
+   * 16,384 pixels of world Y so those exact world keys are retained. */
+  kWsShadowYTiles = 2048,
 };
 
 void WsShadowReset(void);
