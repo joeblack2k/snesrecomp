@@ -667,7 +667,7 @@ bool RtlLoadSnapshotFromMemory(const void *data, size_t size) {
 }
 
 void RtlSaveLoad(int cmd, int slot) {
-  char name[128];
+  char name[RTL_SAVE_PATH_CAPACITY];
   RtlEnsureSaveDir();
   RtlSaveSlotPath(slot, name, sizeof(name));
   printf("*** %s slot %d: %s\n",
@@ -1507,7 +1507,7 @@ void RtlRenderAudio(int16 *audio_buffer, int samples, int channels) {
  * cannot overwrite personal progress. Older builds named the SRAM after the
  * game's internal title ("smw" for every title); RtlMigrateLegacySram copies
  * that forward the first time the generic name is used under the main root. */
-static char s_save_root[96] = "saves";
+static char s_save_root[768] = "saves";
 
 void RtlSetSaveRoot(const char *root) {
   if (!root || !root[0])
@@ -1556,7 +1556,7 @@ void RtlMigrateLegacySram(const char *legacy_title) {
   /* Only migrate into the main offline root — never into a netplay sandbox. */
   if (!legacy_title || !*legacy_title) return;
   if (strcmp(s_save_root, "saves") != 0) return;
-  char cur_path[128];
+  char cur_path[RTL_SAVE_PATH_CAPACITY];
   RtlSramFilePath(cur_path, sizeof(cur_path));
   FILE *cur = fopen(cur_path, "rb");
   if (cur) { fclose(cur); return; }   /* already on the generic name */
@@ -1580,7 +1580,7 @@ void RtlMigrateLegacySram(const char *legacy_title) {
 void RtlReadSram(void) {
   if (!g_sram || g_sram_size <= 0)
     return;
-  char path[128];
+  char path[RTL_SAVE_PATH_CAPACITY];
   RtlMigrateLegacySram(g_rtl_game_info->title);
   RtlSramFilePath(path, sizeof(path));
   FILE *f = fopen(path, "rb");
@@ -1594,7 +1594,7 @@ void RtlReadSram(void) {
 void RtlWriteSram(void) {
   if (!g_sram || g_sram_size <= 0)
     return;
-  char path[128], bak[140];
+  char path[RTL_SAVE_PATH_CAPACITY], bak[RTL_SAVE_PATH_CAPACITY];
   RtlEnsureSaveDir();
   RtlSramFilePath(path, sizeof(path));
   snprintf(bak, sizeof(bak), "%s.bak", path);

@@ -282,6 +282,7 @@ bool RtlUploadSpcImageFromDpLive(CpuState *cpu);
 bool RtlRunFrame(uint32 inputs);
 void RtlReadSram();
 void RtlWriteSram();
+enum { RTL_SAVE_PATH_CAPACITY = 1024 };
 /* Save-directory root for SRAM + savestate slots. Default "saves". Netplay
  * guests use "saves/netplay" so host-driven sync cannot clobber personal files.
  * Pass NULL/"" to restore the default. */

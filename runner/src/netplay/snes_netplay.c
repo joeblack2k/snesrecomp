@@ -767,7 +767,7 @@ static int np_xfer_busy(void)
 
 static int np_write_slot_file(int slot, const void *data, size_t size)
 {
-    char name[128];
+    char name[RTL_SAVE_PATH_CAPACITY];
     FILE *f;
     RtlEnsureSaveDir();
     RtlSaveSlotPath(slot, name, sizeof(name));
@@ -788,7 +788,7 @@ static int np_write_slot_file(int slot, const void *data, size_t size)
 
 static int np_read_slot_file(int slot, uint8_t **out, size_t *out_size)
 {
-    char name[128];
+    char name[RTL_SAVE_PATH_CAPACITY];
     FILE *f;
     long sz;
     uint8_t *buf;
