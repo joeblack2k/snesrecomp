@@ -45,6 +45,13 @@ echo "=== interpreter and bridge ==="
     -o "$OUT/tier2_capture_test"
 (cd "$OUT" && ./tier2_capture_test)
 
+"$CC" -std=c11 -Wall -Wextra -Werror -O1 \
+    -D_POSIX_C_SOURCE=200809L -I "$ROOT/runner/src/snes" \
+    "$ROOT/tests/interp816/tier2_capture_failure_test.c" \
+    "$ROOT/runner/src/snes/tier2_capture.c" \
+    -o "$OUT/tier2_capture_failure_test"
+(cd "$OUT" && ./tier2_capture_failure_test)
+
 "$CC" -std=c11 -Wall -Wextra -Wno-unused-parameter -O1 \
     -I "$ROOT/runner/src/snes" \
     "$ROOT/tests/interp816/interp816_test.c" \

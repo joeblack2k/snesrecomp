@@ -19,6 +19,7 @@ static char s_manifest_path[TIER2_CAPTURE_PATH_CAP];
 static char s_journal_path[TIER2_CAPTURE_PATH_CAP];
 static char s_capture_id[128];
 static FILE *s_journal;
+static int s_journal_unavailable;
 static int s_paths_ready;
 static int s_close_registered;
 static int s_announced;
@@ -131,11 +132,13 @@ int tier2_capture_append_discovery(const char *rom_title,
                                    int outcome,
                                    int32_t frame) {
     init_paths(rom_title);
+    if (s_journal_unavailable) return 0;
     if (!s_journal) {
         s_journal = fopen(s_journal_path, "a");
         if (!s_journal) {
             fprintf(stderr, "[tier2] cannot append dispatch-miss journal: %s\n",
                     s_journal_path);
+            s_journal_unavailable = 1;
             return 0;
         }
         if (!s_close_registered) {
