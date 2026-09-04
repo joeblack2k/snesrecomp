@@ -285,6 +285,9 @@ struct Ppu {
   // Host-only widescreen state; excluded from savestates and cleared by reset.
   PpuWidescreenLineEnhancer *widescreenLineEnhancer;
   void *widescreenLineEnhancerContext;
+  // Layers whose already-widened pixels remain eligible while a line
+  // enhancer is active. Zero preserves the legacy BG1-native-viewport clip.
+  uint8_t wsLineEnhancerWideLayers;
 
   // -- START OF SNAPSHOT, 0x10420 bytes
   uint16_t cgram[0x100];
@@ -448,6 +451,11 @@ void PpuBeginDrawing(Ppu *ppu, uint8_t *pixels, size_t pitch, uint32_t render_fl
 void PpuSetWidescreenLineEnhancer(Ppu *ppu,
                                   PpuWidescreenLineEnhancer *enhancer,
                                   void *context);
+
+// Keep selected physical/world-shadow layers visible in the side margins
+// while a line enhancer adjusts another screen buffer. The legacy default is
+// zero, which clips BG1 to the original viewport for enhancers that replace it.
+void PpuSetWidescreenLineEnhancerWideLayers(Ppu *ppu, uint8_t layer_mask);
 
 // Renderer-neutral host-overlay extraction (opt-in; see
 // docs/HOST_OVERLAY_EXTRACTION.md). Default behavior is unchanged: with no

@@ -167,6 +167,17 @@ int main(void) {
         failures += check(wide_pixels[kExtra + 16] != 0 &&
                               wide_pixels[kExtra + 239] != 0,
                           "explicit BG1 viewport inset retains visible span");
+
+        memset(wide_pixels, 0, sizeof wide_pixels);
+        PpuSetExtraSpace(ppu, kExtra);
+        PpuSetWidescreenLineEnhancerWideLayers(ppu, 1u);
+        ppu_runLine(ppu, 0);
+        ppu_runLine(ppu, 1);
+        failures += check(wide_pixels[0] != 0 &&
+                              wide_pixels[kExtra - 1] != 0 &&
+                              wide_pixels[kExtra + kPpuXPixels] != 0 &&
+                              wide_pixels[kWidePixels - 1] != 0,
+                          "line enhancer preserves opted-in wide BG1 margins");
     }
 
     /* Fine scroll can make one 8-pixel renderer chunk straddle either native

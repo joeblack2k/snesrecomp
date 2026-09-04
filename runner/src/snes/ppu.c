@@ -81,6 +81,12 @@ void PpuSetWidescreenLineEnhancer(Ppu *ppu,
                                   void *context) {
   ppu->widescreenLineEnhancer = enhancer;
   ppu->widescreenLineEnhancerContext = enhancer ? context : NULL;
+  if (!enhancer)
+    ppu->wsLineEnhancerWideLayers = 0;
+}
+
+void PpuSetWidescreenLineEnhancerWideLayers(Ppu *ppu, uint8_t layer_mask) {
+  ppu->wsLineEnhancerWideLayers = (uint8_t)(layer_mask & 0x0fu);
 }
 
 void PpuClearOverlayCaptures(Ppu *ppu) {
@@ -694,6 +700,8 @@ static void PpuApplyMarginGap(Ppu *ppu, uint layer, PpuWindows *win,
 static bool PpuViewportAllows(Ppu *ppu, uint layer, int screen_x,
                               int source_x) {
   if (!ppu->widescreenLineEnhancer)
+    return true;
+  if (ppu->wsLineEnhancerWideLayers & (uint8_t)(1u << layer))
     return true;
   if (ppu->wsViewportInsetL[layer] | ppu->wsViewportInsetR[layer])
     return source_x >= ppu->wsViewportInsetL[layer] &&
