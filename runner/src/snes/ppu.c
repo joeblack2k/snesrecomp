@@ -97,8 +97,7 @@ static bool PpuRenderMainCopy(const Ppu *source, Ppu *scratch,
       !(source->renderFlags & kPpuRenderFlags_NewRenderer) ||
       source->widescreenLineEnhancer ||
       (source->screenEnabled[1] & (objects ? 16 : 2)) ||
-      WsShadowLayerActive(0) || WsShadowLayerActive(2) ||
-      (objects && WsShadowLayerActive(1)))
+      (!objects && (WsShadowLayerActive(0) || WsShadowLayerActive(2))))
     return false;
   size_t output_bytes=(size_t)pitch*224;
   if(PpuRangesOverlap(source,sizeof *source,scratch,sizeof *scratch) ||
@@ -116,6 +115,7 @@ static bool PpuRenderMainCopy(const Ppu *source, Ppu *scratch,
       (PpuRangesOverlap(objects,sizeof source->objBuffer.data,scratch,sizeof *scratch) ||
        PpuRangesOverlap(objects,sizeof source->objBuffer.data,pixels,output_bytes)))
     return false;
+  if(objects && !WsShadowBeginReadOnlyRender())return false;
   memcpy(scratch,source,sizeof *scratch);
   scratch->renderBuffer=pixels;scratch->renderPitch=pitch;
   if (objects) {
@@ -126,6 +126,7 @@ static bool PpuRenderMainCopy(const Ppu *source, Ppu *scratch,
   }
   PpuClearOverlayBindings(scratch);
   PpuDrawWholeLine(scratch,line);
+  if(objects)WsShadowEndReadOnlyRender();
   return true;
 }
 

@@ -454,7 +454,8 @@ bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
 
 // Same copied-line contract, with a caller-verified replacement OBJ z-buffer.
 // Keeps main BG layers, OBJ windows and surviving-layer color math. Rejects
-// subscreen OBJ and any active world-shadow layer; no sprite evaluation occurs.
+// subscreen OBJ; world-shadow lookup caches/counters are restored afterward.
+// No sprite evaluation occurs.
 // Objects contains kPpuBufWidth entries and must not overlap scratch/output.
 bool PpuRenderMainWithObjects(const Ppu *source, Ppu *scratch,
     uint8_t *pixels, uint32_t pitch, unsigned line,

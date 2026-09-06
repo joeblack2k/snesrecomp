@@ -22,6 +22,12 @@ enum {
 
 void WsShadowReset(void);
 
+// Single-render-thread scope for WsShadowTile lookups only. Tile-store writers
+// must not run inside it. Restores fold caches and counters; rejects nesting.
+bool WsShadowBeginReadOnlyRender(void);
+void WsShadowEndReadOnlyRender(void);
+
+
 /* True world-space camera origin for shadow keys (tile capture / margins).
  * For games where PPU scroll == camera (SMW-style), pass hScroll/vScroll.
  * For strip-streaming games (Metal Warriors), pass the WRAM camera and also

@@ -91,6 +91,26 @@ static WsShadowLayer s_layers[kLayers];
 /* Always-on margin lookup accounting (see WsShadowTile). Never armed. */
 static WsShadowMarginStat s_marginStats[kLayers];
 
+/* Render-only lookup modifies fold caches and accounting, never tile stores.
+ * Preserve those records around copied PPU renders on the single render thread. */
+static WsShadowLayer s_renderSavedLayers[kLayers];
+static WsShadowMarginStat s_renderSavedStats[kLayers];
+static bool s_readOnlyRender;
+bool WsShadowBeginReadOnlyRender(void) {
+  if(s_readOnlyRender)return false;
+  memcpy(s_renderSavedLayers,s_layers,sizeof s_layers);
+  memcpy(s_renderSavedStats,s_marginStats,sizeof s_marginStats);
+  s_readOnlyRender=true;
+  return true;
+}
+void WsShadowEndReadOnlyRender(void) {
+  if(!s_readOnlyRender)return;
+  memcpy(s_layers,s_renderSavedLayers,sizeof s_layers);
+  memcpy(s_marginStats,s_renderSavedStats,sizeof s_marginStats);
+  s_readOnlyRender=false;
+}
+
+
 static bool GetEntry(const WsShadowLayer *layer, uint32_t tx, uint32_t ty,
                      uint16_t *entry);
 static WsShadowLayer *EntryStore(WsShadowLayer *layer);
