@@ -442,6 +442,16 @@ void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val);
 void ppu_saveload(Ppu *ppu, SaveLoadInfo *sli);
 void PpuBeginDrawing(Ppu *ppu, uint8_t *pixels, size_t pitch, uint32_t render_flags);
 
+// Render visible line1..224 on a reusable scratch copy, omitting main BG2.
+// Source must contain the already evaluated OBJ buffer and brightness tables.
+// Subscreen BG2, surviving-layer shadows, overlays and line enhancers reject.
+// Caller provides distinct source/scratch objects and a disjoint, uint32-aligned
+// buffer of at least224*pitch bytes; pitch covers the active viewport, multiple4.
+// Original PPU/framebuffer remain unchanged. No line/OAM/DMA events execute;
+// observational window diagnostics may be repeated for surviving layers.
+bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
+                             uint8_t *pixels, uint32_t pitch, unsigned line);
+
 // Replace stale BG1 tilemap pixels in widened side margins before final
 // composition. The callback is host-only and runs independently for main and
 // subscreen buffers.

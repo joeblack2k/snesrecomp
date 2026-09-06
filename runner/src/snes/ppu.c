@@ -76,6 +76,47 @@ void PpuBeginDrawing(Ppu *ppu, uint8_t *pixels, size_t pitch, uint32_t render_fl
   ppu->renderFlags = render_flags;
 }
 
+/* Pointer ranges are caller-owned objects; reject overlap before copying or
+ * writing. This also handles malformed ranges whose address arithmetic wraps. */
+static bool PpuRangesOverlap(const void *a, size_t an, const void *b, size_t bn) {
+  uintptr_t ap=(uintptr_t)a,bp=(uintptr_t)b;
+  if(an>UINTPTR_MAX-ap || bn>UINTPTR_MAX-bp)return true;
+  return ap<bp+bn && bp<ap+an;
+}
+
+bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
+                             uint8_t *pixels, uint32_t pitch, unsigned line) {
+  if (!source || !scratch || !pixels || line < 1 || line > 224 ||
+      source->extraLeftRight > kPpuExtraLeftRight ||
+      source->extraLeftCur > source->extraLeftRight || source->extraRightCur > source->extraLeftRight ||
+      pitch < (kPpuXPixels + source->extraLeftRight * 2) * sizeof(uint32_t) ||
+      pitch % sizeof(uint32_t) || (uintptr_t)pixels % sizeof(uint32_t) ||
+      (size_t)pitch > SIZE_MAX / 224 ||
+      PPU_mode(source) != 1 || PPU_forcedBlank(source) ||
+      !(source->renderFlags & kPpuRenderFlags_NewRenderer) ||
+      source->widescreenLineEnhancer || (source->screenEnabled[1] & 2) ||
+      WsShadowLayerActive(0) || WsShadowLayerActive(2))
+    return false;
+  size_t output_bytes=(size_t)pitch*224;
+  if(PpuRangesOverlap(source,sizeof *source,scratch,sizeof *scratch) ||
+     PpuRangesOverlap(pixels,output_bytes,source,sizeof *source) ||
+     PpuRangesOverlap(pixels,output_bytes,scratch,sizeof *scratch))return false;
+  if(source->renderBuffer && source->renderPitch) {
+    if((size_t)source->renderPitch>SIZE_MAX/224)return false;
+    size_t source_bytes=(size_t)source->renderPitch*224;
+    if(PpuRangesOverlap(pixels,output_bytes,source->renderBuffer,source_bytes) ||
+       PpuRangesOverlap(scratch,sizeof *scratch,source->renderBuffer,source_bytes))return false;
+  }
+  for(unsigned i=0;i<kPpuOverlaySource_Count;i++)
+    if(source->overlayRenderBuffer[i])return false;
+  memcpy(scratch,source,sizeof *scratch);
+  scratch->renderBuffer=pixels;scratch->renderPitch=pitch;
+  scratch->screenEnabled[0]&=(uint8_t)~2u;
+  PpuClearOverlayBindings(scratch);
+  PpuDrawWholeLine(scratch,line);
+  return true;
+}
+
 void PpuSetWidescreenLineEnhancer(Ppu *ppu,
                                   PpuWidescreenLineEnhancer *enhancer,
                                   void *context) {
