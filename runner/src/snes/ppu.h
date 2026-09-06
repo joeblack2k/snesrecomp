@@ -452,6 +452,14 @@ void PpuBeginDrawing(Ppu *ppu, uint8_t *pixels, size_t pitch, uint32_t render_fl
 bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
                              uint8_t *pixels, uint32_t pitch, unsigned line);
 
+// Same copied-line contract, with a caller-verified replacement OBJ z-buffer.
+// Keeps main BG layers, OBJ windows and surviving-layer color math. Rejects
+// subscreen OBJ and any active world-shadow layer; no sprite evaluation occurs.
+// Objects contains kPpuBufWidth entries and must not overlap scratch/output.
+bool PpuRenderMainWithObjects(const Ppu *source, Ppu *scratch,
+    uint8_t *pixels, uint32_t pitch, unsigned line,
+    const PpuZbufType objects[kPpuBufWidth]);
+
 // Replace stale BG1 tilemap pixels in widened side margins before final
 // composition. The callback is host-only and runs independently for main and
 // subscreen buffers.

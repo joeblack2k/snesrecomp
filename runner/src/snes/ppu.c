@@ -84,8 +84,9 @@ static bool PpuRangesOverlap(const void *a, size_t an, const void *b, size_t bn)
   return ap<bp+bn && bp<ap+an;
 }
 
-bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
-                             uint8_t *pixels, uint32_t pitch, unsigned line) {
+static bool PpuRenderMainCopy(const Ppu *source, Ppu *scratch,
+    uint8_t *pixels, uint32_t pitch, unsigned line,
+    const PpuZbufType *objects) {
   if (!source || !scratch || !pixels || line < 1 || line > 224 ||
       source->extraLeftRight > kPpuExtraLeftRight ||
       source->extraLeftCur > source->extraLeftRight || source->extraRightCur > source->extraLeftRight ||
@@ -94,8 +95,10 @@ bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
       (size_t)pitch > SIZE_MAX / 224 ||
       PPU_mode(source) != 1 || PPU_forcedBlank(source) ||
       !(source->renderFlags & kPpuRenderFlags_NewRenderer) ||
-      source->widescreenLineEnhancer || (source->screenEnabled[1] & 2) ||
-      WsShadowLayerActive(0) || WsShadowLayerActive(2))
+      source->widescreenLineEnhancer ||
+      (source->screenEnabled[1] & (objects ? 16 : 2)) ||
+      WsShadowLayerActive(0) || WsShadowLayerActive(2) ||
+      (objects && WsShadowLayerActive(1)))
     return false;
   size_t output_bytes=(size_t)pitch*224;
   if(PpuRangesOverlap(source,sizeof *source,scratch,sizeof *scratch) ||
@@ -109,12 +112,32 @@ bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
   }
   for(unsigned i=0;i<kPpuOverlaySource_Count;i++)
     if(source->overlayRenderBuffer[i])return false;
+  if (objects &&
+      (PpuRangesOverlap(objects,sizeof source->objBuffer.data,scratch,sizeof *scratch) ||
+       PpuRangesOverlap(objects,sizeof source->objBuffer.data,pixels,output_bytes)))
+    return false;
   memcpy(scratch,source,sizeof *scratch);
   scratch->renderBuffer=pixels;scratch->renderPitch=pitch;
-  scratch->screenEnabled[0]&=(uint8_t)~2u;
+  if (objects) {
+    memcpy(scratch->objBuffer.data,objects,sizeof scratch->objBuffer.data);
+    scratch->lineHasSprites=true;
+  } else {
+    scratch->screenEnabled[0]&=(uint8_t)~2u;
+  }
   PpuClearOverlayBindings(scratch);
   PpuDrawWholeLine(scratch,line);
   return true;
+}
+
+bool PpuRenderMainWithoutBg2(const Ppu *source, Ppu *scratch,
+                             uint8_t *pixels, uint32_t pitch, unsigned line) {
+  return PpuRenderMainCopy(source,scratch,pixels,pitch,line,NULL);
+}
+
+bool PpuRenderMainWithObjects(const Ppu *source, Ppu *scratch,
+    uint8_t *pixels, uint32_t pitch, unsigned line,
+    const PpuZbufType objects[kPpuBufWidth]) {
+  return objects && PpuRenderMainCopy(source,scratch,pixels,pitch,line,objects);
 }
 
 void PpuSetWidescreenLineEnhancer(Ppu *ppu,
