@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "ppu.h"
 #include "ppu_legacy.h"
 
@@ -116,7 +117,14 @@ static bool PpuRenderMainCopy(const Ppu *source, Ppu *scratch,
        PpuRangesOverlap(objects,sizeof source->objBuffer.data,pixels,output_bytes)))
     return false;
   if(objects && !WsShadowBeginReadOnlyRender())return false;
-  memcpy(scratch,source,sizeof *scratch);
+  if (!source->wsMode2CaptureLayer) {
+    size_t start = offsetof(Ppu, wsMode2Capture);
+    size_t end = offsetof(Ppu, wsMode2Bg1Palette) + sizeof source->wsMode2Bg1Palette;
+    memcpy(scratch, source, start);
+    memcpy((uint8_t *)scratch + end, (const uint8_t *)source + end, sizeof *scratch - end);
+  } else {
+    memcpy(scratch,source,sizeof *scratch);
+  }
   scratch->renderBuffer=pixels;scratch->renderPitch=pitch;
   if (objects) {
     memcpy(scratch->objBuffer.data,objects,sizeof scratch->objBuffer.data);

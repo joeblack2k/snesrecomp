@@ -443,6 +443,7 @@ void ppu_saveload(Ppu *ppu, SaveLoadInfo *sli);
 void PpuBeginDrawing(Ppu *ppu, uint8_t *pixels, size_t pitch, uint32_t render_flags);
 
 // Render visible line1..224 on a reusable scratch copy, omitting main BG2.
+// Inactive host capture planes are not refreshed in scratch; all other state is.
 // Source must contain the already evaluated OBJ buffer and brightness tables.
 // Subscreen BG2, surviving-layer shadows, overlays and line enhancers reject.
 // Caller provides distinct source/scratch objects and a disjoint, uint32-aligned
