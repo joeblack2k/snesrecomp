@@ -567,7 +567,7 @@ static inline uint8 PpuMosaicAt(Ppu *ppu, int i) {
   return ppu->mosaicModulo[(unsigned)i < (unsigned)kPpuXPixels ? i : (i < 0 ? 0 : kPpuXPixels - 1)];
 }
 
-void ppu_runLine(Ppu* ppu, int line) {
+void PpuPrepareLine(Ppu* ppu, int line) {
   /* Per-line HDMA state must be captured here, not at end-of-frame: games can
    * rewrite windows and scroll registers before every scanline. */
   debug_server_on_ppu_line(line);
@@ -609,12 +609,20 @@ void ppu_runLine(Ppu* ppu, int line) {
              sizeof(ppu->overlayBuffers[kPpuOverlaySource_Obj]));
     ppu->lineHasSprites = !PPU_forcedBlank(ppu) && ppu_evaluateSprites(ppu, line - 1);
 
-    if (ppu->renderFlags & kPpuRenderFlags_NewRenderer) {
-      PpuDrawWholeLine(ppu, line, NULL, NULL);
-    } else {
-      ppu_draw_whole_line_legacy(ppu, line);
-    }
   }
+}
+
+void PpuRenderPreparedLine(Ppu *ppu, int line) {
+  if(line==0)return;
+  if(ppu->renderFlags & kPpuRenderFlags_NewRenderer)
+    PpuDrawWholeLine(ppu,line,NULL,NULL);
+  else
+    ppu_draw_whole_line_legacy(ppu,line);
+}
+
+void ppu_runLine(Ppu *ppu,int line) {
+  PpuPrepareLine(ppu,line);
+  PpuRenderPreparedLine(ppu,line);
 }
 
 typedef struct PpuWindows {

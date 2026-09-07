@@ -436,6 +436,11 @@ void ppu_free(Ppu* ppu);
 void ppu_reset(Ppu* ppu);
 bool ppu_checkOverscan(Ppu* ppu);
 void ppu_handleVblank(Ppu* ppu);
+/* Single render-thread seam: prepare advances original line/OAM state exactly
+ * once; draw consumes that state before registers/VRAM change. Native renderers
+ * may replace draw but must preserve prepare and HDMA/vblank ordering. */
+void PpuPrepareLine(Ppu *ppu, int line);
+void PpuRenderPreparedLine(Ppu *ppu, int line);
 void ppu_runLine(Ppu* ppu, int line);
 uint8_t ppu_read(Ppu* ppu, uint8_t adr);
 void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val);
