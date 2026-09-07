@@ -462,6 +462,15 @@ bool PpuRenderMainWithObjects(const Ppu *source, Ppu *scratch,
     uint8_t *pixels, uint32_t pitch, unsigned line,
     const PpuZbufType objects[kPpuBufWidth]);
 
+/* As above, also exports the background-only priority plane and the OBJ
+ * window-eligible mask for the main screen. Both output planes are required
+ * and must be disjoint from source, scratch, pixels and objects. */
+bool PpuRenderMainWithObjectsAndPlanes(
+    const Ppu *source, Ppu *scratch, uint8_t *pixels, uint32_t pitch,
+    unsigned line, const PpuZbufType objects[kPpuBufWidth],
+    PpuZbufType bg_only[kPpuBufWidth],
+    uint8_t obj_allowed[kPpuBufWidth]);
+
 // Replace stale BG1 tilemap pixels in widened side margins before final
 // composition. The callback is host-only and runs independently for main and
 // subscreen buffers.
