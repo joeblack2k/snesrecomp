@@ -79,7 +79,7 @@ typedef struct WsShadowLayer {
    * is keyed by that anchor. period 0 = no exact period found -> that
    * (row, anchor) keeps the plain map-wrap fallback. */
   const uint16_t *foldVram;
-  struct {
+  struct WsShadowFoldRow {
     uint8_t set;
     uint8_t natCol;
     uint8_t period;
@@ -91,21 +91,27 @@ static WsShadowLayer s_layers[kLayers];
 /* Always-on margin lookup accounting (see WsShadowTile). Never armed. */
 static WsShadowMarginStat s_marginStats[kLayers];
 
-/* Render-only lookup modifies fold caches and accounting, never tile stores.
- * Preserve those records around copied PPU renders on the single render thread. */
-static WsShadowLayer s_renderSavedLayers[kLayers];
+/* Render-only lookup modifies only fold caches and accounting. Preserve those
+ * records around copied PPU renders on the single render thread; the layer's
+ * tile history can be much larger and is immutable under this contract. */
+typedef struct WsShadowFoldRow WsShadowFoldRow;
+static WsShadowFoldRow s_renderSavedFoldRows[kLayers][32];
 static WsShadowMarginStat s_renderSavedStats[kLayers];
 static bool s_readOnlyRender;
 bool WsShadowBeginReadOnlyRender(void) {
   if(s_readOnlyRender)return false;
-  memcpy(s_renderSavedLayers,s_layers,sizeof s_layers);
+  for (int i = 0; i < kLayers; i++)
+    memcpy(s_renderSavedFoldRows[i], s_layers[i].foldRow,
+           sizeof s_renderSavedFoldRows[i]);
   memcpy(s_renderSavedStats,s_marginStats,sizeof s_marginStats);
   s_readOnlyRender=true;
   return true;
 }
 void WsShadowEndReadOnlyRender(void) {
   if(!s_readOnlyRender)return;
-  memcpy(s_layers,s_renderSavedLayers,sizeof s_layers);
+  for (int i = 0; i < kLayers; i++)
+    memcpy(s_layers[i].foldRow, s_renderSavedFoldRows[i],
+           sizeof s_renderSavedFoldRows[i]);
   memcpy(s_marginStats,s_renderSavedStats,sizeof s_marginStats);
   s_readOnlyRender=false;
 }
